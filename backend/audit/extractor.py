@@ -3,6 +3,14 @@ Parse a single page's HTML into a structured ExtractedPage handed to the scorer.
 
 Single dependency: beautifulsoup4 (already lightweight). No JavaScript
 execution — that already happened upstream if the user asked for ?render=js.
+
+Heading + body extraction is restricted to the MAIN CONTENT scope so that
+nav, footer, sidebar, widget and testimonial copy do not leak into the
+SEO analysis. Layout blocks are stripped by:
+  - semantic tags: <nav>, <footer>, <aside>, top-level <header>
+  - class / id heuristics: nav, navigation, menu, footer, sidebar, widget,
+    copyright, breadcrumb, testimonial, masthead, site-header, page-footer
+The cleaned scope then prefers <main> → <article> → <body>.
 """
 from __future__ import annotations
 
@@ -17,6 +25,20 @@ from .models import ExtractedPage
 
 
 _WS = re.compile(r"\s+")
+_LAYOUT_TAGS = ("nav", "footer", "aside")
+_LAYOUT_CLASS_PAT = re.compile(
+    r"(?:^|[\s_\-])("
+    r"nav|navigation|navbar|menu|menubar|"
+    r"footer|footers|page-footer|footer-area|site-footer|"
+    r"sidebar|sidebars|side-bar|"
+    r"widget|widgets|widget-area|"
+    r"copyright|copyrights|"
+    r"breadcrumb|breadcrumbs|"
+    r"testimonial|testimonials|"
+    r"masthead|site-header|page-header|header-area|top-bar"
+    r")(?:[\s_\-]|$)",
+    re.I,
+)
 
 
 def _norm(s: str) -> str:
@@ -30,6 +52,36 @@ def _same_host(a: str, b: str) -> bool:
         return False
 
 
+def _is_layout_el(el) -> bool:
+    """True if element's class or id matches a known layout/widget pattern."""
+    if not hasattr(el, "get"):
+        return False
+    cls_val = el.get("class") or []
+    cls = " ".join(cls_val) if isinstance(cls_val, list) else str(cls_val)
+    eid = str(el.get("id") or "")
+    return bool(_LAYOUT_CLASS_PAT.search(cls)) or bool(_LAYOUT_CLASS_PAT.search(eid))
+
+
+def _strip_layout(soup: BeautifulSoup) -> None:
+    """Remove navigation / footer / sidebar / widget blocks in place."""
+    # 1. Semantic layout tags.
+    for layout in soup(list(_LAYOUT_TAGS)):
+        layout.decompose()
+    # 2. Top-level <header> = site masthead. Nested <header> (e.g. inside
+    #    <article>) is content and is left alone.
+    body_root = soup.body or soup
+    for child in list(getattr(body_root, "children", [])):
+        if getattr(child, "name", None) == "header":
+            child.decompose()
+    # 3. Class / id heuristic for sites that do not use semantic tags.
+    for el in list(soup.find_all(True)):
+        # Skip elements whose ancestor was already decomposed above.
+        if el.parent is None or getattr(el, "attrs", None) is None:
+            continue
+        if _is_layout_el(el):
+            el.decompose()
+
+
 def extract(
     html: str,
     final_url: str,
@@ -40,7 +92,7 @@ def extract(
 ) -> ExtractedPage:
     soup = BeautifulSoup(html or "", "html.parser")
 
-    # Title / meta description / canonical.
+    # ---- head metadata (whole document) ----
     title = _norm(soup.title.string) if soup.title and soup.title.string else ""
 
     desc = ""
@@ -57,21 +109,9 @@ def extract(
     if lc and lc.get("href"):
         canonical = _norm(lc.get("href"))
 
-    # Headings.
-    def _headings(tag: str) -> List[str]:
-        return [
-            _norm(h.get_text(" ", strip=True))
-            for h in soup.find_all(tag)
-            if _norm(h.get_text(" ", strip=True))
-        ]
-
-    h1 = _headings("h1")
-    h2 = _headings("h2")
-    h3 = _headings("h3")
-
-    # Schema (JSON-LD) — extract BEFORE stripping <script> tags below.
+    # ---- schema (JSON-LD) — must run BEFORE we strip <script> tags ----
     schema_types: List[str] = []
-    schema_raw_payloads = []  # keep raw payloads for FAQ extraction
+    schema_raw_payloads = []
     for s in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
         try:
             data = json.loads(s.string or s.text or "{}")
@@ -86,14 +126,9 @@ def extract(
                 schema_types.append(str(t))
     schema_types = list({s for s in schema_types if s})
 
-    # Body text — strip scripts/styles/nav/footer/header for cleaner density.
-    for noisy in soup(["script", "style", "noscript", "template"]):
-        noisy.decompose()
-    main = soup.find("main") or soup.find("article") or soup.body or soup
-    body_text = _norm(main.get_text(" ", strip=True))
-    word_count = len(body_text.split()) if body_text else 0
-
-    # Links.
+    # ---- links + images (whole document, BEFORE layout stripping) ----
+    # Links and image inventories reflect what a search engine sees on the
+    # page; we do not currently exclude footer / nav links from those counts.
     internal, external = [], []
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
@@ -110,7 +145,6 @@ def extract(
         else:
             external.append(link)
 
-    # Images.
     images = []
     for img in soup.find_all("img"):
         src = (img.get("src") or img.get("data-src") or "").strip()
@@ -122,8 +156,29 @@ def extract(
             absu = src
         images.append({"src": absu, "alt": _norm(img.get("alt") or "")})
 
-    # FAQ blocks — use pre-decomposition schema payloads, else fall back.
-    faq_blocks = _detect_faq_blocks(soup, schema_types, schema_raw_payloads)
+    # ---- clean up + scope content to MAIN AREA only ----
+    for noisy in soup(["script", "style", "noscript", "template"]):
+        noisy.decompose()
+    _strip_layout(soup)
+    content_root = soup.find("main") or soup.find("article") or soup.body or soup
+
+    def _headings(tag: str) -> List[str]:
+        return [
+            _norm(h.get_text(" ", strip=True))
+            for h in content_root.find_all(tag)
+            if _norm(h.get_text(" ", strip=True))
+        ]
+
+    h1 = _headings("h1")
+    h2 = _headings("h2")
+    h3 = _headings("h3")
+
+    body_text = _norm(content_root.get_text(" ", strip=True))
+    word_count = len(body_text.split()) if body_text else 0
+
+    # FAQ blocks — uses the cleaned content_root so footer FAQ widgets do not
+    # mask a missing on-page FAQ section.
+    faq_blocks = _detect_faq_blocks(content_root, schema_types, schema_raw_payloads)
 
     return ExtractedPage(
         url=requested_url,
@@ -158,7 +213,7 @@ def _walk_schema(node):
             yield from _walk_schema(v)
 
 
-def _detect_faq_blocks(soup, schema_types, schema_raw_payloads=None) -> List[dict]:
+def _detect_faq_blocks(scope, schema_types, schema_raw_payloads=None) -> List[dict]:
     out: List[dict] = []
     # 1. JSON-LD FAQPage payload — extract Question/Answer pairs.
     for data in (schema_raw_payloads or []):
@@ -175,7 +230,7 @@ def _detect_faq_blocks(soup, schema_types, schema_raw_payloads=None) -> List[dic
                     out.append({"question": qn, "answer": ans})
     # 2. HTML heuristic — <details>/<summary> or h2/h3 ending with "?".
     if not out:
-        for d in soup.find_all("details"):
+        for d in scope.find_all("details"):
             sm = d.find("summary")
             if not sm:
                 continue
@@ -183,7 +238,7 @@ def _detect_faq_blocks(soup, schema_types, schema_raw_payloads=None) -> List[dic
             a = _norm(d.get_text(" ", strip=True))
             if q and "?" in q:
                 out.append({"question": q, "answer": a[: len(q)] and a[len(q):].strip() or a})
-        for h in soup.find_all(["h2", "h3", "h4"]):
+        for h in scope.find_all(["h2", "h3", "h4"]):
             text = _norm(h.get_text(" ", strip=True))
             if text.endswith("?"):
                 sibling = h.find_next_sibling()

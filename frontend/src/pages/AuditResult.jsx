@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { auditApi } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { auditApi, API } from "@/lib/api";
 
 const AREA_LABEL = {
   url:               "URL",
@@ -21,6 +21,38 @@ function ScoreRing({ value }) {
     <div className={`score-ring ${cls}`} data-testid="overall-score-ring">
       <div className="score-ring-value">{value}</div>
       <div className="score-ring-label">/ 100</div>
+    </div>
+  );
+}
+
+function ExportMenu({ auditId }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+  const href = (fmt) => `${API}/audits/${auditId}/export?format=${fmt}`;
+  return (
+    <div className="export-menu" ref={ref}>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => setOpen((v) => !v)}
+        data-testid="export-btn"
+        aria-expanded={open}
+      >
+        Export report ▾
+      </button>
+      {open && (
+        <div className="export-menu-pop" data-testid="export-menu-pop">
+          <a className="export-menu-item" href={href("pdf")} data-testid="export-pdf">PDF (.pdf)</a>
+          <a className="export-menu-item" href={href("md")}  data-testid="export-md">Markdown (.md)</a>
+          <a className="export-menu-item" href={href("txt")} data-testid="export-txt">Plain text (.txt)</a>
+        </div>
+      )}
     </div>
   );
 }
@@ -134,9 +166,12 @@ export default function AuditResult() {
         </div>
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
           <ScoreRing value={audit.overall_score} />
-          <button className="btn" onClick={rerun} disabled={reRunning} data-testid="rerun-btn">
-            {reRunning ? "Re-running…" : "Re-analyse"}
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button className="btn" onClick={rerun} disabled={reRunning} data-testid="rerun-btn">
+              {reRunning ? "Re-running…" : "Re-analyse"}
+            </button>
+            <ExportMenu auditId={audit.id} />
+          </div>
         </div>
       </header>
 

@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from motor.motor_asyncio import AsyncIOMotorClient
 from starlette.middleware.cors import CORSMiddleware
 
@@ -24,6 +25,7 @@ from audit.fetcher import FetchError, fetch
 from audit.extractor import extract
 from audit.models import AuditHistoryRow, AuditRequest, AuditResult
 from audit.scorer import score_page
+from audit.report import render_markdown, render_pdf, render_text
 
 
 ROOT_DIR = Path(__file__).parent
@@ -115,6 +117,47 @@ async def delete_audit(audit_id: str):
     if not res.deleted_count:
         raise HTTPException(404, "Audit not found")
     return {"deleted": audit_id}
+
+
+def _safe_slug(s: str, fallback: str = "audit") -> str:
+    import re
+    out = re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+    return out[:60] or fallback
+
+
+@api.get("/audits/{audit_id}/export")
+async def export_audit(
+    audit_id: str,
+    format: str = Query("md", regex="^(md|markdown|txt|text|pdf)$"),
+):
+    doc = await db.audits.find_one({"id": audit_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Audit not found")
+    audit = AuditResult(**doc)
+    fmt = format.lower()
+    base = f"tse-audit-{_safe_slug(audit.primary_phrase)}-{audit.id[:8]}"
+
+    if fmt in ("md", "markdown"):
+        body = render_markdown(audit).encode("utf-8")
+        return Response(
+            content=body,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base}.md"'},
+        )
+    if fmt in ("txt", "text"):
+        body = render_text(audit).encode("utf-8")
+        return Response(
+            content=body,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base}.txt"'},
+        )
+    # pdf
+    body = render_pdf(audit)
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{base}.pdf"'},
+    )
 
 
 app.include_router(api)

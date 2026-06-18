@@ -54,6 +54,25 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
 - Fixed re-run id stability: re-analysing now keeps the original audit id
   (URL stays shareable).
 
+### V1.1 (2026-01-18) — Heading-extraction refinement + Export
+- **Heading extraction now scopes to main content.** Layout blocks
+  (`<nav>`, `<footer>`, `<aside>`, top-level `<header>`, plus class / id
+  heuristics for `nav`, `navigation`, `menu`, `sidebar`, `widget`,
+  `copyright`, `breadcrumb`, `testimonial`, `masthead`, `site-header`,
+  `page-footer`, `footer-area`, `header-area`, `top-bar`) are stripped
+  before `<main>` / `<article>` / `<body>` is picked. Body text and FAQ
+  detection use the same cleaned scope. Reproduces & fixes the bug where
+  audits picked up noise H2s like "Sheridan France", "Cheap Bed Sale",
+  "Floor-to-Ceiling Fitted Furniture", "Menu", "Company",
+  "Copyright © 2026". 3 new tests in `tests/test_heading_extraction.py`.
+  Total backend test suite: **22/22 passing**.
+- **Export Audit Report.** New endpoint
+  `GET /api/audits/{id}/export?format=md|txt|pdf`. Markdown for docs,
+  plain text for emails, PDF (reportlab) for client deliverables.
+  Filename: `tse-audit-{phrase-slug}-{short-id}.{ext}`. UI: dropdown
+  next to "Re-analyse" on the result page (`data-testid="export-btn"`
+  opens a popover with `export-pdf`, `export-md`, `export-txt`).
+
 ## Prioritised backlog
 ### P1 — Quality
 - Add an error state to Recent audits when `/api/audits` fails (currently silent).
