@@ -61,17 +61,40 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   `copyright`, `breadcrumb`, `testimonial`, `masthead`, `site-header`,
   `page-footer`, `footer-area`, `header-area`, `top-bar`) are stripped
   before `<main>` / `<article>` / `<body>` is picked. Body text and FAQ
-  detection use the same cleaned scope. Reproduces & fixes the bug where
-  audits picked up noise H2s like "Sheridan France", "Cheap Bed Sale",
-  "Floor-to-Ceiling Fitted Furniture", "Menu", "Company",
-  "Copyright © 2026". 3 new tests in `tests/test_heading_extraction.py`.
-  Total backend test suite: **22/22 passing**.
+  detection use the same cleaned scope. 3 tests in
+  `tests/test_heading_extraction.py` lock the fixture in.
 - **Export Audit Report.** New endpoint
   `GET /api/audits/{id}/export?format=md|txt|pdf`. Markdown for docs,
   plain text for emails, PDF (reportlab) for client deliverables.
-  Filename: `tse-audit-{phrase-slug}-{short-id}.{ext}`. UI: dropdown
-  next to "Re-analyse" on the result page (`data-testid="export-btn"`
-  opens a popover with `export-pdf`, `export-md`, `export-txt`).
+
+### V1.2 (2026-01-18) — Topic Matching
+- **Deterministic topic matching** added across URL slug, meta title, H1, H2,
+  body content, and image alt text. No LLM (V1 stays AI-free).
+- New helpers in `audit/scorer.py`:
+  - `_stem(token)` — strips common English suffixes (`ations`, `ation`,
+    `tions`, `tion`, `ings`, `ies`, `ing`, `ers`, `er`, `ed`, `es`, `ly`,
+    `s`, `y`) and collapses doubled consonants. Tiny + deterministic.
+  - `_GEO_NORMALISE` — adjective ↔ country (spanish↔spain, british↔britain,
+    french↔france, etc., ~25 entries). Phase 2 LLM will own the long tail.
+  - `_topic_tokens(s)` — produces the canonical "topic shape" token set.
+  - `_topic_score(target, candidate)` — 0-100 token-cover percentage,
+    order-independent.
+  - `_topic_match(target, candidate)` — convenience wrapper, threshold 80%.
+- New PASS tier inserted between substring-contains and the partial fallback:
+  - `url_topic` (area score 75, priority medium, status pass)
+  - `title_topic` (warn medium — still suggests leading with the exact phrase)
+  - `h1_topic` (area score 80, priority high, status pass)
+  - `h2_topic` (counts toward H2 area score 60+)
+  - `images_alt_phrase` now accepts topical matches too
+  - Body content: keyword density counts exact mentions + topical-equivalent
+    sentence-level mentions (split on `.`/`!`/`?`); secondary coverage uses
+    topic match as fallback to substring.
+- 11 new tests in `tests/test_topic_matching.py` including the user's exact
+  example: target `Spanish Residency Services` against H1 `Residency Services
+  For Expats In Spain` → 100% topic score → promoted to strength `h1_topic`,
+  area score ≥ 80 (was previously a partial-warn at 55).
+- Total backend test suite: **40/40 passing**, zero regressions on existing
+  fixtures (well-optimised + poor + heading-extraction + export contract).
 
 ## Prioritised backlog
 ### P1 — Quality
@@ -80,51 +103,57 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   React-level `form-error` alert is unreachable. Either drop `required` or
   remove the dead setError branch.
 
-### P2 — Phase 2 (Universal Key) — move from phrase matching to **topic matching**
+### P2 — Phase 2 (Universal Key) — long-tail semantics
 
-**Problem surfaced in real audits (2026-01-18):** V1 is too literal. It rewards
-substring matches and penalises semantically equivalent rewrites. A human SEO
-would mark these as strong matches; the current scorer marks them as partial.
+V1.2 already ships **deterministic** topic matching (stem + demonym + token
+overlap) so the basic Spanish-Residency case is covered without an LLM. Phase
+2 layers in LLM-graded relevance for the long tail that hand-coded rules
+can't reach:
 
-| Target phrase                | Page H1 / heading                              | Human verdict | V1 verdict |
-|------------------------------|------------------------------------------------|---------------|------------|
-| Spanish Residency Services   | Residency Services For Expats In Spain         | strong match  | partial    |
-| Spanish Residency Services   | Spanish Residency Help                         | strong match  | partial    |
-| Spanish Residency Services   | Spanish Residency Support                      | strong match  | partial    |
+- Synonyms and industry jargon that aren't pure morphology
+  ("law firm" ↔ "legal practice", "GP" ↔ "general practitioner")
+- Tense / aspect drift ("we help you move" ↔ "moving help")
+- Cross-lingual demonyms not in `_GEO_NORMALISE`
+- Caching grade verdicts on `(target_phrase, candidate_text)` so re-audits
+  are free
 
-And supporting-topic recognition is missing entirely — these should count as
-*the same topic cluster* without being listed as secondary phrases:
+Plus the original Phase 2 items:
 
-- TIE Card Application
-- NIE Number Application
-- Padrón Registration
-- → all members of the broader **Spanish Residency** theme.
-
-**What "topic matching" needs to add to the scorer:**
-1. **Semantic equivalence** of the primary phrase against title / H1 / H2 / URL
-   slug. Use the Universal Key (Claude / Gemini / GPT) to grade equivalence
-   on a 0-100 scale rather than substring-only. Cache the verdict on
-   `(primary_phrase, candidate_text)` so re-audits are free.
-2. **Topical-cluster expansion** of the primary phrase into an LLM-generated
-   list of supporting subtopics, then run the existing H2 / body / internal-link
-   coverage checks against the expanded cluster instead of only against the
-   user-supplied secondary phrases. Surface "supporting topics covered:
-   3 of 7" in the area_scores breakdown.
-3. **Replace** `_exact / _contains / _partial_overlap` literal helpers in
-   `scorer.py` with a `phrase_topic_score(target, candidate) -> int` that
-   falls back to literal matching if the LLM call fails, so the engine
-   stays deterministic when the key budget is exhausted.
-4. Re-tag findings: a heading that's a topical match should land in
-   **Strengths**, not as a "partial match" warning in Recommendations.
-
-**Why this matters:** the current scoring is silently nudging users towards
-keyword stuffing ("just put the exact phrase in the H1") instead of writing
-naturally for a topic. Phase 2 should reverse that incentive.
-
-- Semantic phrase-coverage check (LLM-graded relevance) — covers items 1 & 3 above
-- Topical-cluster expansion — item 2 above
 - Missing-FAQ opportunity discovery
 - Trust-signal / topical-authority checks
+
+### P2 — Hub Page Detection (new — 2026-01-18)
+
+User insight from the Civion Residency audit: some pages are **hubs** not
+landing pages, and the auditor's current "add more phrase mentions"
+recommendation is wrong for them.
+
+Hub example:
+
+```
+Primary topic:    Spanish Residency Services
+Supporting topics:
+  - TIE Card Application
+  - NIE Number Application
+  - Padron Registration
+  - Social Security Number
+  - Digital Certificates
+```
+
+Future scorer should classify each audited page as:
+
+1. **Landing page** — single focused service, current scoring rules apply
+2. **Hub page** — broad topic page that links to many supporting pages;
+   reward presence of supporting-topic internal links + H2/H3 coverage,
+   relax the keyword-density rule, and stop nagging for more exact-phrase
+   mentions
+3. **Supporting page** — narrow sub-topic of a hub; reward back-link to the
+   hub and clear topical alignment
+
+Classification heuristics to explore:
+- Internal-link fan-out + diversity of anchor topics → hub signal
+- Word count + topic-coverage breadth vs depth → hub vs landing
+- Optional LLM judgement when the heuristic is borderline
 
 ### P3 — Phase 3
 - Competitor-comparison gap analysis (give 2-3 ranking competitor URLs,

@@ -1,0 +1,55 @@
+{
+  "summary": "V1.2 Topic Matching backend verification complete. All 40 pre-existing tests + 7 new contract tests pass (47/47). Live /api/audit and /api/audits/{id}/export endpoints verified over public ingress. No regressions: V1.1 heading extraction (3 tests) and well-optimised fixture (overall_score >= 75) intact. Frontend smoke skipped per scope (backend-only).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_topic_matching.py",
+    "/app/backend/tests/test_v12_contract.py",
+    "/app/backend/tests/test_page_auditor_v1.py",
+    "/app/backend/tests/test_api_integration.py",
+    "/app/backend/tests/test_heading_extraction.py",
+    "/app/backend/tests/test_export_endpoint.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "verified_contract_items": {
+    "pytest_full_suite": "47/47 PASS (40 pre-existing + 7 new contract)",
+    "_stem_residency": "residenc OK",
+    "_stem_services": "servic OK",
+    "_stem_application(s)": "applic OK",
+    "_topic_score_user_example_eq_100": "PASS",
+    "_topic_match_unrelated_false": "PASS (Spanish Residency Services vs Cheap Bed Sale)",
+    "e2e_h1_topic_in_strengths_and_h1_score_ge_80": "PASS (h1=100)",
+    "e2e_url_topic_in_strengths_and_url_score_ge_70": "PASS",
+    "e2e_image_alt_uses_images_alt_phrase_key": "PASS",
+    "e2e_body_no_content_phrase_missing_when_topical": "PASS",
+    "regression_heading_extraction": "3/3 PASS",
+    "regression_well_optimised_score_ge_75": "PASS",
+    "regression_export_endpoint": "md/txt/pdf=200, unknown_format=422, unknown_id=404 (verified live)",
+    "live_api_health": "200 OK on /api/",
+    "hub_page_detection_not_implemented": "Confirmed — not introduced (out of scope)"
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scorer.py is 673 lines — past the recommended 700 LOC budget watermark. Consider splitting into per-area modules (url.py, meta.py, headings.py, content.py, images.py, schema.py, faq.py) before V1.3 to keep maintainability.",
+    "_GEO_NORMALISE is a hardcoded demonym table (20-ish entries). Document this is intentional for V1.2 (Phase 2 LLM will handle the long tail) — already noted in source comment. No action needed, just flagging for next iteration.",
+    "Stemmer drops trailing 'y' aggressively (residency -> residenc). This is fine for matching but ensure no other check uses _stem for display/logging where a non-word stub would look odd to users.",
+    "_topic_match threshold (80%) and partial threshold (60%) are intentional product decisions per agent-to-agent note — not flagged as a bug, only as a documented design choice future agents should not silently change."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v12_contract.py (new — explicit contract checklist mirroring review_request bullets)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (out of scope)"},
+  "test_credentials": "N/A — app has no auth",
+  "seed_data_creation": "None. Live API smoke created one audit doc for https://example.com via POST /api/audit (id=65abda3c-acd0-4693-be43-3d56bc47f644).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "V1.2 topic-matching is fully green. New file /app/backend/tests/test_v12_contract.py is the contract checklist — keep it as a regression for future iterations. If touching scorer.py, re-run pytest + this contract file. Frontend smoke (/, /audits/{id}) was NOT performed this iteration — main agent confirmed frontend is unchanged in V1.2; if they touch shared imports, run iteration_1/iteration_2 frontend Playwright suites.",
+  "rca of the issue": "N/A — no failures found."
+}

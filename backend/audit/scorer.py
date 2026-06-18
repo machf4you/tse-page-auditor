@@ -27,7 +27,63 @@ from .models import AuditResult, ExtractedPage, ScoreCheck
 
 
 _PUNCT = re.compile(r"[\s\-_/]+")
-_STOPS = {"the", "a", "an", "of", "in", "on", "for", "to", "and", "or"}
+_STOPS = {
+    "the", "a", "an", "of", "in", "on", "for", "to", "and", "or",
+    "at", "by", "with", "from", "into", "your", "our", "my", "i",
+    "is", "are", "was", "were", "be", "been", "being",
+}
+
+# Light suffix-stripping stemmer — deterministic, fast, no NLTK.
+# Strips common English plurals / gerunds / agent nouns so "residency",
+# "residencies" and "residency-services" collapse to the same token.
+_SUFFIXES = ("ations", "ation", "tions", "tion", "ings", "ies", "ing", "ers", "er",
+             "ed", "es", "ly", "s", "y")
+
+
+def _stem(t: str) -> str:
+    """Tiny deterministic stemmer for SEO token matching."""
+    if len(t) <= 3:
+        return t
+    for suf in _SUFFIXES:
+        if len(t) > len(suf) + 2 and t.endswith(suf):
+            base = t[: -len(suf)]
+            # Drop a doubled trailing consonant (running -> run).
+            if len(base) >= 2 and base[-1] == base[-2] and base[-1] not in "aeiou":
+                base = base[:-1]
+            return base
+    return t
+
+
+# Adjective / demonym ↔ place normalisation. Lets the auditor see
+# "Spanish residency services" and "residency services for expats in Spain"
+# as the same topic. Deliberately small + deterministic, not exhaustive —
+# Phase 2 (LLM) will own the long tail.
+_GEO_NORMALISE = {
+    "spanish": "spain",
+    "british": "britain",
+    "english": "england",
+    "scottish": "scotland",
+    "welsh": "wales",
+    "irish": "ireland",
+    "french": "france",
+    "german": "germany",
+    "italian": "italy",
+    "portuguese": "portugal",
+    "dutch": "netherlands",
+    "belgian": "belgium",
+    "swiss": "switzerland",
+    "american": "america",
+    "canadian": "canada",
+    "australian": "australia",
+    "mexican": "mexico",
+    "japanese": "japan",
+    "chinese": "china",
+    "indian": "india",
+    "brazilian": "brazil",
+    "russian": "russia",
+    "polish": "poland",
+    "greek": "greece",
+}
 
 
 def _norm(s: str) -> str:
@@ -36,6 +92,15 @@ def _norm(s: str) -> str:
 
 def _toks(s: str) -> List[str]:
     return [t for t in _norm(s).split(" ") if t and t not in _STOPS]
+
+
+def _topic_tokens(s: str) -> set:
+    """Stemmed + geo-normalised token set — the canonical 'topic shape' of s."""
+    out = set()
+    for t in _toks(s):
+        t = _GEO_NORMALISE.get(t, t)
+        out.add(_stem(t))
+    return out
 
 
 def _contains(hay: str, p: str) -> bool:
@@ -56,6 +121,30 @@ def _partial_overlap(hay: str, p: str) -> float:
         return 0.0
     hs = set(_toks(hay))
     return sum(1 for t in pt if t in hs) / len(pt)
+
+
+def _topic_score(phrase: str, candidate: str) -> int:
+    """
+    0-100 token-overlap score between a target phrase and a candidate string
+    (URL slug, title, H1, H2, image alt, etc.).
+
+    Order-independent. Applies light stemming and demonym→country
+    normalisation so 'Spanish Residency Services' and
+    'Residency Services For Expats In Spain' collapse to the same topic
+    (both become {span, residenc, servic} → 3/3 = 100).
+    """
+    pt = _topic_tokens(phrase)
+    if not pt:
+        return 0
+    ct = _topic_tokens(candidate)
+    if not ct:
+        return 0
+    return round(len(pt & ct) / len(pt) * 100)
+
+
+def _topic_match(phrase: str, candidate: str) -> bool:
+    """True when the candidate is a strong topical match (≥80% token cover)."""
+    return _topic_score(phrase, candidate) >= 80
 
 
 # ---------- areas (each returns (score 0-100, [ScoreCheck])) ----------
@@ -83,10 +172,17 @@ def s_url(p: ExtractedPage, phrase: str) -> Tuple[int, List[ScoreCheck]]:
                               area="url", status="pass", priority="high",
                               detail=f"'{phrase}' is in the URL."))
         return (80, out)
-    if _partial_overlap(slug, phrase) >= 0.5:
+    topic = _topic_score(phrase, slug)
+    if topic >= 80:
+        out.append(ScoreCheck(key="url_topic", label="URL slug is a topical match for the phrase",
+                              area="url", status="pass", priority="medium",
+                              detail=f"Slug '{slug}' covers {topic}% of the phrase tokens "
+                                     f"(stem + demonym normalised)."))
+        return (75, out)
+    if topic >= 60 or _partial_overlap(slug, phrase) >= 0.5:
         out.append(ScoreCheck(key="url_partial", label="URL only partially matches the phrase",
                               area="url", status="warn", priority="medium",
-                              detail=f"URL slug contains some tokens of '{phrase}'."))
+                              detail=f"URL slug covers {topic}% of '{phrase}' tokens."))
         return (50, out)
     out.append(ScoreCheck(key="url_missing", label="Phrase missing from the URL",
                           area="url", status="fail", priority="medium",
@@ -114,6 +210,12 @@ def s_title(p: ExtractedPage, phrase: str) -> Tuple[int, List[ScoreCheck]]:
         out.append(ScoreCheck(key="title_present", label="Phrase present in meta title",
                               area="meta_title", status="warn", priority="high",
                               detail=f"'{phrase}' is in the title but not at the start. Move it forward."))
+    elif _topic_match(phrase, t):
+        score += 50
+        out.append(ScoreCheck(key="title_topic", label="Meta title is a topical match for the phrase",
+                              area="meta_title", status="warn", priority="medium",
+                              detail=f"Title covers {_topic_score(phrase, t)}% of phrase tokens. "
+                                     f"Consider rewriting to lead with '{phrase}' for an exact-match win."))
     else:
         out.append(ScoreCheck(key="title_missing_phrase", label="Phrase missing from meta title",
                               area="meta_title", status="fail", priority="high",
@@ -192,14 +294,21 @@ def s_h1(p: ExtractedPage, phrase: str) -> Tuple[int, List[ScoreCheck]]:
                               area="h1", status="pass", priority="high",
                               detail=f"H1 '{h1}' contains '{phrase}'."))
         return (85, out)
-    if _partial_overlap(h1, phrase) >= 0.6:
+    topic = _topic_score(phrase, h1)
+    if topic >= 80:
+        out.append(ScoreCheck(key="h1_topic", label="H1 is a topical match for the phrase",
+                              area="h1", status="pass", priority="high",
+                              detail=f"H1 '{h1}' covers {topic}% of '{phrase}' tokens "
+                                     f"(stem + demonym normalised). A human reader would treat these as the same topic."))
+        return (80, out)
+    if topic >= 60 or _partial_overlap(h1, phrase) >= 0.6:
         out.append(ScoreCheck(key="h1_partial", label="H1 partially matches the phrase",
                               area="h1", status="warn", priority="high",
-                              detail=f"H1 '{h1}' shares tokens with '{phrase}' but is not a substring match."))
+                              detail=f"H1 '{h1}' shares {topic}% of '{phrase}' tokens but the wording is off-topic in places."))
         return (55, out)
     out.append(ScoreCheck(key="h1_unrelated", label="H1 does not reference the phrase",
                           area="h1", status="fail", priority="high",
-                          detail=f"Rewrite the H1 to include '{phrase}'."))
+                          detail=f"Rewrite the H1 to address '{phrase}' (topic match {topic}%)."))
     return (15, out)
 
 
@@ -216,12 +325,20 @@ def s_h2(p: ExtractedPage, phrase: str, secondaries: List[str]) -> Tuple[int, Li
         out.append(ScoreCheck(key="h2_phrase", label="An H2 references the primary phrase",
                               area="h2", status="pass", priority="medium",
                               detail="At least one H2 contains the primary phrase."))
+    elif any(_topic_match(phrase, h) for h in p.h2):
+        score += 30
+        out.append(ScoreCheck(key="h2_topic", label="An H2 is a topical match for the phrase",
+                              area="h2", status="pass", priority="medium",
+                              detail="At least one H2 covers the same topic as the primary phrase "
+                                     "even though the exact wording differs."))
     else:
         out.append(ScoreCheck(key="h2_no_phrase", label="No H2 references the primary phrase",
                               area="h2", status="warn", priority="medium",
-                              detail=f"Add an H2 that contains '{phrase}' or a close variant."))
+                              detail=f"Add an H2 that addresses '{phrase}' or a close variant."))
     if secondaries:
-        sec_hits = sum(1 for s in secondaries if any(_contains(h, s) for h in p.h2))
+        def _sec_hit(s):
+            return any(_contains(h, s) or _topic_match(s, h) for h in p.h2)
+        sec_hits = sum(1 for s in secondaries if _sec_hit(s))
         if sec_hits >= max(1, len(secondaries) // 2):
             score += 30
             out.append(ScoreCheck(key="h2_secondaries", label="H2s cover the secondary phrases",
@@ -247,24 +364,39 @@ def s_content(p: ExtractedPage, phrase: str, secondaries: List[str]) -> Tuple[in
                               detail=f"Only {wc} words. Aim for ≥ 600 for a service / target page."))
         return (15, out)
 
-    # Keyword density.
-    n_phrase = body.count(_norm(phrase)) if phrase else 0
+    # Keyword density. Counts exact substring + topical-equivalent mentions
+    # (so 'Spanish residency services' and 'residency services for expats in Spain'
+    # both count as on-topic body usage).
+    n_exact = body.count(_norm(phrase)) if phrase else 0
+    n_topic_extra = 0
+    if phrase:
+        # Sliding sentence-ish scan: split on '. ' / '! ' / '? ' and count
+        # sentences that are a topic match but not already an exact substring.
+        for chunk in re.split(r"[.!?]\s+", body):
+            if not chunk:
+                continue
+            if _norm(phrase) in chunk:
+                continue  # already counted as exact
+            if _topic_match(phrase, chunk):
+                n_topic_extra += 1
+    n_phrase = n_exact + n_topic_extra
     density = (n_phrase * len(_toks(phrase)) / wc * 100) if wc else 0.0
     score = 0
     if n_phrase == 0:
         out.append(ScoreCheck(key="content_phrase_missing", label="Primary phrase not found in body content",
                               area="content", status="fail", priority="high",
-                              detail=f"Use '{phrase}' at least 2-3 times naturally in the body copy."))
+                              detail=f"Use '{phrase}' (or a close topical variant) at least 2-3 times naturally in the body."))
     elif n_phrase < 2:
         score += 25
         out.append(ScoreCheck(key="content_phrase_thin", label="Primary phrase used only once",
                               area="content", status="warn", priority="medium",
-                              detail=f"Add 1-2 more natural mentions of '{phrase}' across the page."))
+                              detail=f"Add 1-2 more natural mentions of '{phrase}' across the page "
+                                     f"({n_exact} exact, {n_topic_extra} topical)."))
     elif 1.0 <= density <= 2.5:
         score += 55
         out.append(ScoreCheck(key="content_density_ok", label="Keyword density in the optimal range",
                               area="content", status="pass", priority="medium",
-                              detail=f"Phrase density {density:.2f}% (sweet spot 1.0-2.5%)."))
+                              detail=f"Phrase density {density:.2f}% across {n_exact} exact + {n_topic_extra} topical mentions (sweet spot 1.0-2.5%)."))
     elif density > 4.0:
         score += 25
         out.append(ScoreCheck(key="content_overused", label="Keyword density looks over-optimised",
@@ -276,18 +408,18 @@ def s_content(p: ExtractedPage, phrase: str, secondaries: List[str]) -> Tuple[in
                               area="content", status="warn", priority="low",
                               detail=f"Density {density:.2f}%. Aim for 1.0-2.5%."))
 
-    # Depth — secondaries covered in body + word count.
+    # Depth — secondaries covered in body (exact OR topical match) + word count.
     if secondaries:
-        cov = sum(1 for s in secondaries if _contains(body, s))
+        cov = sum(1 for s in secondaries if _contains(body, s) or _topic_match(s, body))
         if cov >= max(1, len(secondaries) // 2):
             score += 25
             out.append(ScoreCheck(key="content_secondaries", label="Body covers the secondary phrases",
                                   area="content", status="pass", priority="low",
-                                  detail=f"{cov} of {len(secondaries)} secondary phrases appear in the body."))
+                                  detail=f"{cov} of {len(secondaries)} secondary phrases appear in the body (exact or topical)."))
         else:
             out.append(ScoreCheck(key="content_secondaries_missing", label="Secondary phrases under-covered in body",
                                   area="content", status="warn", priority="medium",
-                                  detail=f"Only {cov} of {len(secondaries)} secondary phrases appear in the body."))
+                                  detail=f"Only {cov} of {len(secondaries)} secondary phrases appear in the body (exact or topical)."))
     else:
         score += 15
 
@@ -392,16 +524,18 @@ def s_images(p: ExtractedPage, phrase: str) -> Tuple[int, List[ScoreCheck]]:
                               area="images", status="warn", priority="medium",
                               detail=f"Only {with_alt} of {n} images have alt text."))
     if phrase:
-        rel = sum(1 for i in p.images if _contains(i.get("alt", ""), phrase))
+        rel = sum(1 for i in p.images
+                  if _contains(i.get("alt", ""), phrase)
+                  or _topic_match(phrase, i.get("alt", "")))
         if rel:
             score += 50
             out.append(ScoreCheck(key="images_alt_phrase", label="An image alt mentions the phrase",
                                   area="images", status="pass", priority="low",
-                                  detail=f"{rel} image alt text(s) reference '{phrase}'."))
+                                  detail=f"{rel} image alt text(s) reference '{phrase}' (exact or topical)."))
         else:
             out.append(ScoreCheck(key="images_alt_no_phrase", label="No image alt mentions the phrase",
                                   area="images", status="warn", priority="low",
-                                  detail=f"Use '{phrase}' in at least one image's alt text."))
+                                  detail=f"Use '{phrase}' or a close topical variant in at least one image's alt text."))
     return (min(score, 100), out)
 
 
