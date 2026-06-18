@@ -60,12 +60,21 @@ async def run_audit(req: AuditRequest):
     result = score_page(extracted, req.primary_phrase, req.secondary_phrases)
 
     # Persist (upsert on (url, primary_phrase)) and FIFO-evict beyond MAX_HISTORY.
+    # Use $setOnInsert for id + created_at so re-runs keep the original audit id
+    # (stable URLs / shareable links) while only the scoring fields update.
     doc = result.model_dump()
+    immutable = {"id": doc.pop("id"), "created_at": doc.pop("created_at")}
+    existing = await db.audits.find_one(
+        {"url": result.url, "primary_phrase": result.primary_phrase},
+        {"_id": 0, "id": 1},
+    )
     await db.audits.update_one(
         {"url": result.url, "primary_phrase": result.primary_phrase},
-        {"$set": doc},
+        {"$set": doc, "$setOnInsert": immutable},
         upsert=True,
     )
+    if existing and existing.get("id"):
+        result.id = existing["id"]
     # Evict oldest if we're over MAX_HISTORY.
     total = await db.audits.count_documents({})
     if total > MAX_HISTORY:
