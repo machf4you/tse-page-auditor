@@ -80,6 +80,28 @@ class ScoreCheck(BaseModel):
     detail: str = ""
 
 
+class PageAssessment(BaseModel):
+    """Page-level decision summary — primary output of the auditor.
+
+    Sits above the score and individual findings: tells the user *what kind
+    of page they're auditing*, *how well it matches the target phrase*, and
+    *what to do next*. Deterministic (no LLM in V1).
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    page_type: Literal["landing", "category", "hub"] = "landing"
+    page_type_label: str = "Landing Page"
+    page_type_signals: List[str] = Field(default_factory=list)
+
+    fit: Literal["strong", "moderate", "weak"] = "weak"
+    fit_label: str = "Weak Fit"
+    fit_score: int = 0
+    fit_breakdown: dict = Field(default_factory=dict)
+
+    recommendation: str = ""
+    rationale: str = ""
+
+
 class AuditResult(BaseModel):
     """Full audit payload returned to the UI and stored in Mongo."""
     model_config = ConfigDict(extra="ignore")
@@ -92,6 +114,9 @@ class AuditResult(BaseModel):
     render_method: Literal["http", "js"] = "http"
     fetch_ms: int = 0
     fetch_status: int = 0
+
+    # Page-level decision summary — primary output as of V1.3.
+    page_assessment: Optional[PageAssessment] = None
 
     overall_score: int = 0
     area_scores: dict = Field(default_factory=dict)

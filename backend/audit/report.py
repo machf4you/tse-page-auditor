@@ -49,6 +49,12 @@ def _fmt_dt(iso: str) -> str:
         return iso or ""
 
 
+def _wrap(text: str, width: int = 70) -> List[str]:
+    """Tiny word-wrap so plain-text rationale doesn't run off the right margin."""
+    import textwrap
+    return textwrap.wrap(text or "", width=width) or [""]
+
+
 def _section_lines(title: str, items: List[ScoreCheck]) -> List[str]:
     out = [title, "-" * len(title)]
     if not items:
@@ -85,8 +91,34 @@ def render_markdown(a: AuditResult) -> str:
     lines.append(f"**Primary phrase:** {a.primary_phrase}")
     if a.secondary_phrases:
         lines.append(f"**Secondary phrases:** {', '.join(a.secondary_phrases)}")
-    lines.append(f"**Overall score:** {a.overall_score} / 100")
     lines.append(f"**Audited:** {_fmt_dt(a.created_at)}")
+    lines.append("")
+
+    # Page Assessment is the primary output as of V1.3.
+    pa = a.page_assessment
+    if pa:
+        lines.append("## Page Assessment")
+        lines.append("")
+        lines.append(f"- **Page type:** {pa.page_type_label}")
+        lines.append(f"- **Target phrase fit:** {pa.fit_label} ({pa.fit_score}/100)")
+        lines.append(f"- **Strategic recommendation:** {pa.recommendation}")
+        if pa.rationale:
+            lines.append("")
+            lines.append(f"> {pa.rationale}")
+        if pa.page_type_signals:
+            lines.append("")
+            lines.append("Page type signals:")
+            for s in pa.page_type_signals:
+                lines.append(f"  - {s}")
+        if pa.fit_breakdown:
+            lines.append("")
+            lines.append("Fit breakdown:")
+            for k in ("title", "h1", "url", "h2", "content"):
+                if k in pa.fit_breakdown:
+                    lines.append(f"  - {k.title()}: {pa.fit_breakdown[k]} / 100")
+        lines.append("")
+
+    lines.append(f"**Overall score:** {a.overall_score} / 100")
     lines.append("")
     lines.append("## Area scores")
     lines.append("")
@@ -131,8 +163,23 @@ def render_text(a: AuditResult) -> str:
     lines.append(f"Primary phrase   : {a.primary_phrase}")
     if a.secondary_phrases:
         lines.append(f"Secondary phrases: {', '.join(a.secondary_phrases)}")
-    lines.append(f"Overall score    : {a.overall_score} / 100")
     lines.append(f"Audited          : {_fmt_dt(a.created_at)}")
+    lines.append("")
+
+    pa = a.page_assessment
+    if pa:
+        lines.append("PAGE ASSESSMENT")
+        lines.append("-" * 72)
+        lines.append(f"  Page type       : {pa.page_type_label}")
+        lines.append(f"  Phrase fit      : {pa.fit_label} ({pa.fit_score}/100)")
+        lines.append(f"  Recommendation  : {pa.recommendation}")
+        if pa.rationale:
+            lines.append("")
+            for chunk in _wrap(pa.rationale, 70):
+                lines.append(f"    {chunk}")
+        lines.append("")
+
+    lines.append(f"Overall score    : {a.overall_score} / 100")
     lines.append("")
     lines.append("AREA SCORES")
     lines.append("-" * 72)
@@ -236,6 +283,39 @@ def render_pdf(a: AuditResult) -> bytes:
     ]))
     story.append(head_tbl)
     story.append(Spacer(1, 8))
+
+    # Page Assessment block — primary output.
+    pa = a.page_assessment
+    if pa:
+        story.append(Paragraph("Page Assessment", h_sec))
+        fit_colour = (
+            "#16a34a" if pa.fit == "strong"
+            else "#d97706" if pa.fit == "moderate"
+            else "#dc2626"
+        )
+        rows = [
+            [Paragraph("<b>Page type</b>", h_sub),
+             Paragraph(pa.page_type_label, h_sub)],
+            [Paragraph("<b>Target phrase fit</b>", h_sub),
+             Paragraph(
+                 f"<font color='{fit_colour}'><b>{pa.fit_label}</b></font> "
+                 f"({pa.fit_score}/100)",
+                 h_sub,
+             )],
+            [Paragraph("<b>Recommendation</b>", h_sub),
+             Paragraph(f"<b>{pa.recommendation}</b>", h_sub)],
+        ]
+        tbl_a = Table(rows, colWidths=[40 * mm, 130 * mm])
+        tbl_a.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.25, colors.HexColor("#e2e8f0")),
+        ]))
+        story.append(tbl_a)
+        if pa.rationale:
+            story.append(Paragraph(pa.rationale, h_detail))
+        story.append(Spacer(1, 6))
 
     # Area scores table.
     story.append(Paragraph("Area scores", h_sec))

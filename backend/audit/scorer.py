@@ -648,7 +648,15 @@ def score_page(extracted: ExtractedPage, phrase: str, secondaries: List[str]) ->
         weaknesses=weaknesses,
         recommendations=recommendations,
         page_snapshot=_snapshot(extracted),
+        page_assessment=_assess(extracted, phrase),
     )
+
+
+def _assess(extracted, phrase):
+    # Local import to avoid a circular module load (assessment.py imports
+    # _topic_score / _contains from scorer.py).
+    from .assessment import assess
+    return assess(extracted, phrase)
 
 
 def _snapshot(p: ExtractedPage) -> dict:

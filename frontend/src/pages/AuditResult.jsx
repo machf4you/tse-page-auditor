@@ -25,6 +25,58 @@ function ScoreRing({ value }) {
   );
 }
 
+function AssessmentCard({ a }) {
+  const fitClass =
+    a.fit === "strong" ? "fit-strong"
+    : a.fit === "moderate" ? "fit-moderate"
+    : "fit-weak";
+  const breakdown = a.fit_breakdown || {};
+  return (
+    <section className="card assessment-card" data-testid="page-assessment">
+      <div className="assessment-header">
+        <div className="assessment-eyebrow">Page Assessment</div>
+        <div className="assessment-rec" data-testid="assessment-recommendation">
+          {a.recommendation}
+        </div>
+        {a.rationale && <div className="assessment-rationale">{a.rationale}</div>}
+      </div>
+      <div className="assessment-grid">
+        <div className="assessment-cell">
+          <div className="assessment-label">Page type</div>
+          <div className="assessment-value pill pill-type" data-testid="assessment-page-type">
+            {a.page_type_label}
+          </div>
+          {a.page_type_signals?.length > 0 && (
+            <ul className="assessment-signals" data-testid="assessment-signals">
+              {a.page_type_signals.slice(0, 4).map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="assessment-cell">
+          <div className="assessment-label">Target phrase fit</div>
+          <div className={`assessment-value pill ${fitClass}`} data-testid="assessment-fit">
+            {a.fit_label} <span className="assessment-fitscore">{a.fit_score} / 100</span>
+          </div>
+          {Object.keys(breakdown).length > 0 && (
+            <ul className="assessment-signals" data-testid="assessment-fit-breakdown">
+              {["title", "h1", "url", "h2", "content"].map((k) =>
+                k in breakdown ? (
+                  <li key={k}>
+                    <span className="assessment-fit-key">{k.toUpperCase()}</span>
+                    <span className="assessment-fit-val">{breakdown[k]}</span>
+                  </li>
+                ) : null
+              )}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ExportMenu({ auditId }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(null);
@@ -240,6 +292,10 @@ export default function AuditResult() {
       </header>
 
       {error && <div className="alert error" data-testid="rerun-error">{error}</div>}
+
+      {audit.page_assessment && (
+        <AssessmentCard a={audit.page_assessment} />
+      )}
 
       <section className="card">
         <h2 className="section-title">Area scores</h2>
