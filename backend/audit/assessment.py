@@ -152,8 +152,18 @@ def _h2_subtopic_tokens(h2: str, anchor_tokens: set) -> set:
 
 # ----------- Classification -----------
 
-def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]]:
-    """Return (page_type, label, signals_list)."""
+def classify(
+    page: ExtractedPage,
+    phrase: str = "",
+    fit_breakdown: dict | None = None,
+) -> tuple[str, str, list[str]]:
+    """Return (page_type, label, signals_list).
+
+    `fit_breakdown` (optional) is the per-area phrase-fit dict from
+    `phrase_fit()` — when provided, it powers the V1.3.2 Landing
+    Precedence gate (see below).
+    """
+    fit_breakdown = fit_breakdown or {}
     signals: list[str] = []
     url_lower = (page.url or "").lower()
 
@@ -176,14 +186,13 @@ def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]
     if cat_score >= 3:
         return ("category", "Category Page", signals)
 
-    # 2. LANDING vs HUB — split on whether the page introduces multiple
-    #    distinct sub-topics, NOT on H2 count or link breadth.
+    # 2. LANDING vs HUB
     h2s = list(page.h2 or [])
     h1 = (page.h1 or [""])[0]
     anchor = h1 or phrase or ""
     anchor_tokens = _topic_tokens(anchor) if anchor else set()
 
-    sub_topic_h2s: list[tuple[str, set]] = []  # (h2_text, new_tokens)
+    sub_topic_h2s: list[tuple[str, set]] = []
     aligned_h2s: list[str] = []
     generic_h2s: list[str] = []
     for h in h2s:
@@ -191,7 +200,6 @@ def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]
             generic_h2s.append(h)
             continue
         if not anchor_tokens:
-            # No anchor to compare against — treat as aligned (don't penalise).
             aligned_h2s.append(h)
             continue
         new_tokens = _h2_subtopic_tokens(h, anchor_tokens)
@@ -200,17 +208,36 @@ def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]
         else:
             aligned_h2s.append(h)
 
-    # The single decisive rule: a page is a Hub if ≥4 H2 sections introduce
-    # distinct sub-topics. Otherwise it's a Landing — even with many H2s,
-    # many internal links and a long word count.
     if len(sub_topic_h2s) >= 4:
-        examples = ", ".join(f"'{h}'" for h, _ in sub_topic_h2s[:3])
-        signals.append(
-            f"{len(sub_topic_h2s)} H2 sections introduce distinct sub-topics "
-            f"(e.g. {examples})"
+        # ------ V1.3.2 Landing Precedence gate ------
+        # When the title, H1 AND URL all strongly match the target phrase
+        # AND the page has a commercial CTA AND the H2 sections are
+        # substantive (not navigation-card snippets), this is a deep
+        # landing page that explains its single service in depth — not
+        # a hub.
+        strong_anchors_count = sum([
+            (fit_breakdown.get("title", 0) or 0) >= 80,
+            (fit_breakdown.get("h1", 0) or 0) >= 80,
+            (fit_breakdown.get("url", 0) or 0) >= 50,
+        ])
+        has_cta = bool(_COMMERCIAL_CTA.search(page.body_text or ""))
+        # Total non-generic H2 sections share the body word count.
+        substantive_h2_count = len(sub_topic_h2s) + len(aligned_h2s)
+        avg_words_per_h2 = (
+            (page.word_count or 0) / max(1, substantive_h2_count)
         )
-        # H2 pairwise diversity adds colour to the Hub diagnosis when present.
-        if len(sub_topic_h2s) >= 4:
+        landing_precedence = (
+            strong_anchors_count >= 2
+            and has_cta
+            and avg_words_per_h2 >= 150
+        )
+
+        if not landing_precedence:
+            examples = ", ".join(f"'{h}'" for h, _ in sub_topic_h2s[:3])
+            signals.append(
+                f"{len(sub_topic_h2s)} H2 sections introduce distinct sub-topics "
+                f"(e.g. {examples})"
+            )
             pair_scores = [_topic_score(a, b) for (a, _), (b, _) in
                            combinations(sub_topic_h2s, 2)]
             avg_overlap = (sum(pair_scores) / len(pair_scores)) if pair_scores else 100
@@ -218,35 +245,46 @@ def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]
                 signals.append(
                     f"Sub-topics are mutually distinct (avg overlap {avg_overlap:.0f}%)"
                 )
+            signals.append(
+                f"~{int(avg_words_per_h2)} words per H2 — navigation depth, "
+                f"not content depth"
+            )
+            if aligned_h2s:
+                signals.append(
+                    f"{len(aligned_h2s)} H2 section(s) still support the H1 topic"
+                )
+            return ("hub", "Hub Page", signals)
+
+        # Landing precedence triggered — fall through and surface why.
+        signals.append(
+            f"Strong phrase fit ({strong_anchors_count}/3 anchors) + commercial CTA "
+            f"+ {int(avg_words_per_h2)} words per H2 → detailed landing page, "
+            f"not a navigation hub"
+        )
+        signals.append(
+            f"{len(sub_topic_h2s)} H2 sub-sections expand the service rather than "
+            f"linking to deeper pages"
+        )
+    else:
+        # < 4 sub-topic H2s — vanilla landing, surface the structure.
         if aligned_h2s:
             signals.append(
-                f"{len(aligned_h2s)} H2 section(s) still support the H1 topic"
+                f"{len(aligned_h2s)} of {len(h2s)} H2 sections support the H1 topic"
             )
         if generic_h2s:
             signals.append(
-                f"{len(generic_h2s)} generic landing-page section(s)"
+                f"{len(generic_h2s)} generic landing-page section(s) "
+                f"(FAQ / Pricing / Reviews / Process)"
             )
-        return ("hub", "Hub Page", signals)
-
-    # LANDING — surface whichever positive signals we found.
-    if aligned_h2s:
-        signals.append(
-            f"{len(aligned_h2s)} of {len(h2s)} H2 sections support the H1 topic"
-        )
-    if generic_h2s:
-        signals.append(
-            f"{len(generic_h2s)} generic landing-page section(s) "
-            f"(FAQ / Pricing / Reviews / Process)"
-        )
-    if sub_topic_h2s:
-        signals.append(
-            f"{len(sub_topic_h2s)} H2 section(s) touch additional topics but stay "
-            f"within the service scope"
-        )
-    if _COMMERCIAL_CTA.search(page.body_text or ""):
-        signals.append("Commercial CTA detected in body copy")
-    if (page.word_count or 0) < 1500 and len(h2s) <= 6:
-        signals.append("Focused page (under 1500 words, ≤6 H2 sections)")
+        if sub_topic_h2s:
+            signals.append(
+                f"{len(sub_topic_h2s)} H2 section(s) touch additional topics but "
+                f"stay within the service scope"
+            )
+        if _COMMERCIAL_CTA.search(page.body_text or ""):
+            signals.append("Commercial CTA detected in body copy")
+        if (page.word_count or 0) < 1500 and len(h2s) <= 6:
+            signals.append("Focused page (under 1500 words, ≤6 H2 sections)")
     return ("landing", "Landing Page", signals)
 
 
@@ -393,8 +431,8 @@ _LABEL_BY_FIT = {
 
 
 def assess(page: ExtractedPage, phrase: str) -> PageAssessment:
-    page_type, page_type_label, type_signals = classify(page, phrase)
     fit, fit_score, fit_breakdown = phrase_fit(page, phrase)
+    page_type, page_type_label, type_signals = classify(page, phrase, fit_breakdown)
     recommendation, rationale = recommend(page_type, fit, fit_score)
     return PageAssessment(
         page_type=page_type,

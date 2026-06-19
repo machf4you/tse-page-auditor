@@ -90,6 +90,43 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   showing what the (broken) extractor stored. With the fix both UI and
   export reflect the real page state.
 
+### V1.3.2 (2026-01-19) — Landing Precedence gate
+
+**User-reported regression**: V1.3.1 still mis-classified deep landing
+pages (*Bathroom Renovations*, *SEO Services*, *Local SEO Services*,
+*NIE & TIE Assistance*) as Hub when they had 4+ detailed supporting
+sub-sections.
+
+**Fix**: once ≥4 sub-topic H2s are detected, Hub is now **gated** by
+three independent signals. A page only becomes a Hub if AT LEAST ONE
+gate fails:
+
+  1. **Strong phrase fit** on ≥2 of {title ≥ 80, h1 ≥ 80, url ≥ 50}
+  2. **Commercial CTA** present in body copy
+  3. **Average ≥150 words per non-generic H2** (depth, not navigation
+     cards)
+
+If all three pass → Landing Page (deep landing).
+If any fails → Hub Page.
+
+**Verified golden examples**:
+- *Bathroom Renovations* / *SEO Services* / *Local SEO Services* /
+  *NIE & TIE Assistance* with 5 sub-topic H2s + commercial CTA +
+  ≥250 words / H2 → **Landing Page** ✓
+- Civion `spanish-residency-services` (live): 7 sub-topic H2s, strong
+  fit, but only ~69 words / H2 → fails gate #3 → **Hub Page** ✓
+- Synthetic *Healthcare in Spain* / *Education Support* hubs: short
+  navigation-card sections + no commercial CTA → **Hub Page** ✓
+- Same Bathroom Renovations content but no CTA → fails gate #2 →
+  **Hub Page**
+- Same content audited against an unrelated phrase → fails gate #1 →
+  **Hub Page**
+
+**Tests**: 9 new tests in `tests/test_classification_v132.py`
+including all four user landing examples + three user hub examples +
+the two failure-mode boundary cases. Total backend suite:
+**108/108 passing**.
+
 ### V1.3.1 (2026-01-19) — Landing vs Hub classifier refinement
 
 **User-reported regression**: focused service landing pages with ≥ 5 H2s
