@@ -100,3 +100,42 @@ def test_nested_header_inside_article_is_kept():
     ex = extract(html, "https://x.test/post/", 200, 1, "http", "https://x.test/post/")
     assert ex.h1 == ["Article title"]
     assert ex.h2 == ["Body section"]
+
+
+def test_wordpress_elementor_widgets_are_not_stripped():
+    """
+    Real-world regression: page builders (Elementor / Divi / Beaver Builder /
+    Gutenberg) wrap their content blocks in containers with class names like
+    `elementor-widget`, `elementor-element`, `nav-menu` etc. The earlier V1.1
+    layout filter matched any class containing the word `widget` / `nav` and
+    silently stripped the whole page, leaving h1=[], h2=[], word_count=~9.
+    The Civion residency page reproduced this exactly. The fixture below is
+    a stripped-down version of the same DOM shape.
+    """
+    html = """<!doctype html>
+    <html><head><title>Spanish Residency Services</title></head>
+    <body class="wp-singular">
+      <nav class="main-nav"><a href="/">Home</a></nav>
+      <div class="elementor elementor-186">
+        <div class="elementor-element elementor-element-516e">
+          <div class="elementor-element elementor-widget">
+            <h1>Residency Services for Expats in Spain</h1>
+          </div>
+          <div class="elementor-element elementor-widget">
+            <h2>TIE Card Application</h2>
+            <p>Detailed copy about TIE cards goes here.</p>
+          </div>
+          <div class="elementor-element elementor-widget">
+            <h2>NIE Number Application</h2>
+            <p>Detailed copy about NIE numbers goes here.</p>
+          </div>
+        </div>
+      </div>
+      <footer class="page-footer"><h2>Copyright 2026</h2></footer>
+    </body></html>"""
+    ex = extract(html, "https://x.test/", 200, 1, "http", "https://x.test/")
+    assert ex.h1 == ["Residency Services for Expats in Spain"]
+    assert ex.h2 == ["TIE Card Application", "NIE Number Application"]
+    assert ex.word_count > 10
+    # Footer copy is still stripped (semantic <footer>).
+    assert "Copyright" not in ex.body_text

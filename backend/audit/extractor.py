@@ -26,19 +26,6 @@ from .models import ExtractedPage
 
 _WS = re.compile(r"\s+")
 _LAYOUT_TAGS = ("nav", "footer", "aside")
-_LAYOUT_CLASS_PAT = re.compile(
-    r"(?:^|[\s_\-])("
-    r"nav|navigation|navbar|menu|menubar|"
-    r"footer|footers|page-footer|footer-area|site-footer|"
-    r"sidebar|sidebars|side-bar|"
-    r"widget|widgets|widget-area|"
-    r"copyright|copyrights|"
-    r"breadcrumb|breadcrumbs|"
-    r"testimonial|testimonials|"
-    r"masthead|site-header|page-header|header-area|top-bar"
-    r")(?:[\s_\-]|$)",
-    re.I,
-)
 
 
 def _norm(s: str) -> str:
@@ -52,18 +39,24 @@ def _same_host(a: str, b: str) -> bool:
         return False
 
 
-def _is_layout_el(el) -> bool:
-    """True if element's class or id matches a known layout/widget pattern."""
-    if not hasattr(el, "get"):
-        return False
-    cls_val = el.get("class") or []
-    cls = " ".join(cls_val) if isinstance(cls_val, list) else str(cls_val)
-    eid = str(el.get("id") or "")
-    return bool(_LAYOUT_CLASS_PAT.search(cls)) or bool(_LAYOUT_CLASS_PAT.search(eid))
-
-
 def _strip_layout(soup: BeautifulSoup) -> None:
-    """Remove navigation / footer / sidebar / widget blocks in place."""
+    """
+    Remove navigation / footer / aside chrome in place.
+
+    Uses **semantic HTML5 tags only** — `<nav>`, `<footer>`, `<aside>` plus
+    the top-level `<header>` (site masthead). A nested `<header>` inside
+    `<article>` is article content and stays.
+
+    We deliberately do NOT class-match on words like `nav`, `menu`,
+    `widget`, `sidebar` etc. Real-world WordPress / Elementor / Divi /
+    Beaver Builder themes use those words inside *content* class
+    taxonomies (e.g. `elementor-widget`) and a class-based strip
+    silently nukes the page content. The earlier "Sheridan France /
+    Cheap Bed Sale / Copyright" noise that motivated this filter all
+    sits inside semantic `<nav>` / `<aside>` / `<footer>` blocks on
+    well-built sites, so semantic-only stripping handles those without
+    catching legitimate content as collateral.
+    """
     # 1. Semantic layout tags.
     for layout in soup(list(_LAYOUT_TAGS)):
         layout.decompose()
@@ -73,13 +66,6 @@ def _strip_layout(soup: BeautifulSoup) -> None:
     for child in list(getattr(body_root, "children", [])):
         if getattr(child, "name", None) == "header":
             child.decompose()
-    # 3. Class / id heuristic for sites that do not use semantic tags.
-    for el in list(soup.find_all(True)):
-        # Skip elements whose ancestor was already decomposed above.
-        if el.parent is None or getattr(el, "attrs", None) is None:
-            continue
-        if _is_layout_el(el):
-            el.decompose()
 
 
 def extract(

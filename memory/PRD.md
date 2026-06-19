@@ -56,16 +56,39 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
 
 ### V1.1 (2026-01-18) — Heading-extraction refinement + Export
 - **Heading extraction now scopes to main content.** Layout blocks
-  (`<nav>`, `<footer>`, `<aside>`, top-level `<header>`, plus class / id
-  heuristics for `nav`, `navigation`, `menu`, `sidebar`, `widget`,
-  `copyright`, `breadcrumb`, `testimonial`, `masthead`, `site-header`,
-  `page-footer`, `footer-area`, `header-area`, `top-bar`) are stripped
+  (`<nav>`, `<footer>`, `<aside>`, top-level `<header>`) are stripped
   before `<main>` / `<article>` / `<body>` is picked. Body text and FAQ
-  detection use the same cleaned scope. 3 tests in
-  `tests/test_heading_extraction.py` lock the fixture in.
+  detection use the same cleaned scope.
 - **Export Audit Report.** New endpoint
   `GET /api/audits/{id}/export?format=md|txt|pdf`. Markdown for docs,
   plain text for emails, PDF (reportlab) for client deliverables.
+
+### V1.1.1 (2026-01-19) — Layout-strip de-aggression (critical fix)
+- **Problem**: V1.1 also class-matched on words like `widget`, `nav`,
+  `menu`, `sidebar` etc. WordPress page builders
+  (Elementor / Divi / Beaver Builder / Gutenberg) wrap content in
+  containers with class names like `elementor-widget` and
+  `elementor-element`, so the layout filter silently stripped the
+  ENTIRE page content. The Civion residency audit reproduced this
+  exactly — H1 found by raw BeautifulSoup but `page_snapshot.h1=[]`,
+  `h2=[]`, `word_count=9` in the stored audit.
+- **Fix**: dropped the class/id heuristic entirely. Strip only semantic
+  HTML5 tags: `<nav>`, `<footer>`, `<aside>`, and the top-level
+  `<header>` (site masthead — nested `<header>` inside `<article>` is
+  content and stays). The earlier "Sheridan France / Cheap Bed Sale /
+  Copyright" noise headings the user reported all sit inside semantic
+  layout tags on well-built sites, so semantic-only stripping handles
+  them without false positives.
+- **Verified**: civion.es now extracts the real H1
+  ("Residency Services for Expats in Spain"), 8 H2s, 557 words,
+  5 FAQs — score jumps from 41 (bug) to 69 (correct, with V1.2 topic
+  match on the H1). New regression test
+  `test_wordpress_elementor_widgets_are_not_stripped` locks this in.
+- **Markdown / PDF / TXT export contract was already correct** — UI and
+  export both read from the same `page_snapshot`. The mismatch reported
+  by the user was UI showing what the user *saw* on the page vs. export
+  showing what the (broken) extractor stored. With the fix both UI and
+  export reflect the real page state.
 
 ### V1.2 (2026-01-18) — Topic Matching
 - **Deterministic topic matching** added across URL slug, meta title, H1, H2,
