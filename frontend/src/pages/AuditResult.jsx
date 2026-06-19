@@ -40,12 +40,18 @@ function ExportMenu({ auditId }) {
 
   // Synchronous download. Critical: do NOT await anything before .click() —
   // Chrome requires the download to happen in the same tick as the user
-  // gesture or it silently refuses. Cross-origin downloads with
-  // `Content-Disposition: attachment` (set by the backend) trigger the
-  // browser's download flow rather than a page navigation.
+  // gesture or it silently refuses. We also build the URL against
+  // `window.location.origin` (same-origin via the ingress `/api/*` proxy)
+  // because Chrome ignores the `download` attribute on cross-origin
+  // anchors and may refuse to auto-trigger the download even with
+  // `Content-Disposition: attachment`. Same-origin is the only path that
+  // works reliably across Chrome + Safari + Firefox.
+  const sameOriginExport = (fmt) =>
+    `${window.location.origin}/api/audits/${auditId}/export?format=${fmt}`;
+
   const download = (fmt, evt) => {
     if (evt) { evt.preventDefault(); evt.stopPropagation(); }
-    const url = `${API}/audits/${auditId}/export?format=${fmt}`;
+    const url = sameOriginExport(fmt);
     console.log("[TSE Export]", fmt, "→", url);
     setErr("");
     setBusy(fmt);
@@ -53,7 +59,6 @@ function ExportMenu({ auditId }) {
       const a = document.createElement("a");
       a.href = url;
       a.download = `tse-audit-${auditId.slice(0, 8)}.${fmt}`;
-      a.target = "_blank";
       a.rel = "noopener noreferrer";
       a.style.display = "none";
       document.body.appendChild(a);
@@ -64,8 +69,6 @@ function ExportMenu({ auditId }) {
       console.error("[TSE Export] anchor click failed:", e);
       setErr("Download failed: " + (e?.message || e));
       setBusy(null);
-      // Last-resort fallback — open the export URL in a new tab so the user
-      // can right-click → Save As if the direct download is blocked.
       try {
         window.open(url, "_blank", "noopener,noreferrer");
       } catch (_openErr) {
@@ -74,7 +77,7 @@ function ExportMenu({ auditId }) {
     }
   };
 
-  const openUrl = (fmt) => `${API}/audits/${auditId}/export?format=${fmt}`;
+  const openUrl = sameOriginExport;
 
   return (
     <div className="export-menu" ref={ref}>
@@ -90,21 +93,21 @@ function ExportMenu({ auditId }) {
       {open && (
         <div className="export-menu-pop" data-testid="export-menu-pop">
           <a className="export-menu-item" href={openUrl("pdf")}
-             target="_blank" rel="noopener noreferrer"
+             rel="noopener noreferrer"
              download={`tse-audit-${auditId.slice(0, 8)}.pdf`}
              onClick={(e) => download("pdf", e)}
              data-testid="export-pdf">
             {busy === "pdf" ? "Preparing PDF…" : "PDF (.pdf)"}
           </a>
           <a className="export-menu-item" href={openUrl("md")}
-             target="_blank" rel="noopener noreferrer"
+             rel="noopener noreferrer"
              download={`tse-audit-${auditId.slice(0, 8)}.md`}
              onClick={(e) => download("md", e)}
              data-testid="export-md">
             {busy === "md" ? "Preparing Markdown…" : "Markdown (.md)"}
           </a>
           <a className="export-menu-item" href={openUrl("txt")}
-             target="_blank" rel="noopener noreferrer"
+             rel="noopener noreferrer"
              download={`tse-audit-${auditId.slice(0, 8)}.txt`}
              onClick={(e) => download("txt", e)}
              data-testid="export-txt">
