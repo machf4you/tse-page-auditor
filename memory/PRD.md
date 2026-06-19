@@ -90,6 +90,77 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   showing what the (broken) extractor stored. With the fix both UI and
   export reflect the real page state.
 
+### V1.3 (2026-01-19) — Page Assessment (primary output)
+
+**Pivot from scoring to decision-making.** Every audit now leads with a
+Page Assessment block that answers three questions an SEO consultant
+actually cares about:
+
+  1. **Page type** — Landing Page · Category Page · Hub Page
+  2. **Target phrase fit** — Strong · Moderate · Weak (0-100 score)
+  3. **Strategic recommendation** — one of 5 canonical sentences
+
+The score is still computed and visible (top-right of result page), but
+is now secondary. The assessment is what shows first and is what gets
+exported.
+
+#### New modules
+- `audit/assessment.py` — `classify`, `phrase_fit`, `recommend`, `assess`.
+- `PageAssessment` Pydantic model on `AuditResult.page_assessment`.
+
+#### Classification heuristics (deterministic, no LLM)
+- **Category**: URL contains `/shop/ /store/ /products/ /category/
+  /collection/ /range/ /c/`, JSON-LD includes `Product / CollectionPage /
+  ItemList / OfferCatalog / Offer`, ≥ 5 price markers in body. Score ≥ 3
+  = category.
+- **Hub**: ≥ 5 H2 sections, H2 topical diversity (avg pairwise topic
+  overlap < 40 %), ≥ 15 internal links, long content (≥ 800 words)
+  without a strong commercial CTA. Score ≥ 3 = hub.
+- **Landing** (default): focused page, few H2s, commercial CTA present.
+
+#### Phrase fit (0-100, weighted)
+- title 20 %, h1 25 %, url 15 %, h2 15 %, content 25 %.
+- Each component uses exact-substring OR the V1.2 `_topic_score`
+  fallback, so "Spanish Residency Services" vs "Residency Services For
+  Expats In Spain" still scores 100 on title/H1/URL.
+- Content score caps at 50 when there is no exact mention — prevents a
+  large unrelated page from gaming the fit on topical noise alone.
+- Thresholds: ≥75 strong, ≥50 moderate, <50 weak.
+
+#### Recommendation matrix (5 canonical strings, exact-match stable)
+
+| Page type | Strong fit | Moderate fit | Weak fit |
+|---|---|---|---|
+| Landing | "Keep and optimise this page." (or "Phrase and page are already well aligned." when fit ≥ 90) | "Improve existing landing page." | "Create a dedicated landing page for this phrase." |
+| Category | "Keep and optimise this page." | "Improve existing landing page." | "Create a dedicated landing page for this phrase." |
+| Hub | "Keep as a hub page and consider creating dedicated landing pages for the most important subtopics." | "Keep as a hub page." | "Create a dedicated landing page for this phrase." |
+
+#### Verified
+- **Civion golden case**: page_type = hub, fit = strong (77 / 100),
+  recommendation = "Keep as a hub page and consider creating dedicated
+  landing pages for the most important subtopics." — matches the user's
+  Example 2 verbatim.
+- **example.com**: page_type = landing, fit = moderate (62 / 100),
+  recommendation = "Improve existing landing page."
+
+#### Tests
+- 12 new tests in `tests/test_page_assessment.py` covering each cell of
+  the recommendation matrix + classification edge cases + phrase-fit
+  edge cases.
+- Full backend suite: **60/60 passing**.
+- Frontend Playwright pass: assessment renders above area scores,
+  testids all present, no regressions on Re-analyse / Export.
+
+#### UI / Export
+- Prominent assessment card at the top of `/audits/:id`
+  (data-testids: `page-assessment`, `assessment-page-type`,
+  `assessment-fit`, `assessment-recommendation`, `assessment-signals`,
+  `assessment-fit-breakdown`). Left-accent border, large headline
+  recommendation, rationale paragraph, two-column grid for page-type
+  pill + fit pill with supporting signal bullets.
+- `render_markdown` / `render_text` / `render_pdf` all surface the
+  Page Assessment block near the top of every exported report.
+
 ### V1.2 (2026-01-18) — Topic Matching
 - **Deterministic topic matching** added across URL slug, meta title, H1, H2,
   body content, and image alt text. No LLM (V1 stays AI-free).

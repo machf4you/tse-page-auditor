@@ -219,7 +219,7 @@
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  z-index: 20;
+  z-index: 50;
   min-width: 180px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -261,6 +261,8 @@
 .assessment-card {
   background: linear-gradient(180deg, #fafbff 0%, #ffffff 100%);
   border-left: 4px solid var(--accent);
+  position: relative;
+  z-index: 1;
 }
 .assessment-eyebrow {
   text-transform: uppercase;
