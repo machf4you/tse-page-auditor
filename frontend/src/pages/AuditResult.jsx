@@ -27,14 +27,47 @@ function ScoreRing({ value }) {
 
 function ExportMenu({ auditId }) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(null);  // 'pdf' | 'md' | 'txt' | null
+  const [err, setErr] = useState("");
   const ref = useRef(null);
+
   useEffect(() => {
     if (!open) return undefined;
     const onClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
-  const href = (fmt) => `${API}/audits/${auditId}/export?format=${fmt}`;
+
+  const download = async (fmt) => {
+    setErr("");
+    setBusy(fmt);
+    try {
+      const res = await fetch(
+        `${API}/audits/${auditId}/export?format=${fmt}`,
+        { credentials: "omit" },
+      );
+      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename="([^"]+)"/i.exec(cd);
+      const name = m ? m[1] : `tse-audit-${auditId.slice(0, 8)}.${fmt}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Defer revoke so Safari has time to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      setOpen(false);
+    } catch (e) {
+      setErr(e?.message || "Download failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="export-menu" ref={ref}>
       <button
@@ -48,9 +81,22 @@ function ExportMenu({ auditId }) {
       </button>
       {open && (
         <div className="export-menu-pop" data-testid="export-menu-pop">
-          <a className="export-menu-item" href={href("pdf")} data-testid="export-pdf">PDF (.pdf)</a>
-          <a className="export-menu-item" href={href("md")}  data-testid="export-md">Markdown (.md)</a>
-          <a className="export-menu-item" href={href("txt")} data-testid="export-txt">Plain text (.txt)</a>
+          <button type="button" className="export-menu-item"
+                  onClick={() => download("pdf")} disabled={!!busy}
+                  data-testid="export-pdf">
+            {busy === "pdf" ? "Preparing PDF…" : "PDF (.pdf)"}
+          </button>
+          <button type="button" className="export-menu-item"
+                  onClick={() => download("md")} disabled={!!busy}
+                  data-testid="export-md">
+            {busy === "md" ? "Preparing Markdown…" : "Markdown (.md)"}
+          </button>
+          <button type="button" className="export-menu-item"
+                  onClick={() => download("txt")} disabled={!!busy}
+                  data-testid="export-txt">
+            {busy === "txt" ? "Preparing text…" : "Plain text (.txt)"}
+          </button>
+          {err && <div className="export-menu-error" data-testid="export-error">{err}</div>}
         </div>
       )}
     </div>

@@ -236,5 +236,16 @@
   color: var(--ink);
   text-decoration: none;
   border-radius: 6px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
 }
-.export-menu-item:hover { background: #f1f5f9; }
+.export-menu-item:hover:not(:disabled) { background: #f1f5f9; }
+.export-menu-item:disabled { opacity: 0.6; cursor: progress; }
+.export-menu-error {
+  padding: 8px 12px 4px;
+  color: #b91c1c;
+  font-size: 12px;
+}
