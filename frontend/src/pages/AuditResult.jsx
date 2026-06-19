@@ -27,7 +27,7 @@ function ScoreRing({ value }) {
 
 function ExportMenu({ auditId }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(null);  // 'pdf' | 'md' | 'txt' | null
+  const [busy, setBusy] = useState(null);
   const [err, setErr] = useState("");
   const ref = useRef(null);
 
@@ -38,35 +38,43 @@ function ExportMenu({ auditId }) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  const download = async (fmt) => {
+  // Synchronous download. Critical: do NOT await anything before .click() —
+  // Chrome requires the download to happen in the same tick as the user
+  // gesture or it silently refuses. Cross-origin downloads with
+  // `Content-Disposition: attachment` (set by the backend) trigger the
+  // browser's download flow rather than a page navigation.
+  const download = (fmt, evt) => {
+    if (evt) { evt.preventDefault(); evt.stopPropagation(); }
+    const url = `${API}/audits/${auditId}/export?format=${fmt}`;
+    console.log("[TSE Export]", fmt, "→", url);
     setErr("");
     setBusy(fmt);
     try {
-      const res = await fetch(
-        `${API}/audits/${auditId}/export?format=${fmt}`,
-        { credentials: "omit" },
-      );
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
-      const blob = await res.blob();
-      const cd = res.headers.get("Content-Disposition") || "";
-      const m = /filename="([^"]+)"/i.exec(cd);
-      const name = m ? m[1] : `tse-audit-${auditId.slice(0, 8)}.${fmt}`;
-      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = name;
+      a.download = `tse-audit-${auditId.slice(0, 8)}.${fmt}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.display = "none";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // Defer revoke so Safari has time to start the download.
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-      setOpen(false);
+      setTimeout(() => { setBusy(null); setOpen(false); }, 400);
     } catch (e) {
-      setErr(e?.message || "Download failed");
-    } finally {
+      console.error("[TSE Export] anchor click failed:", e);
+      setErr("Download failed: " + (e?.message || e));
       setBusy(null);
+      // Last-resort fallback — open the export URL in a new tab so the user
+      // can right-click → Save As if the direct download is blocked.
+      try {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } catch (_openErr) {
+        // already reported via setErr above
+      }
     }
   };
+
+  const openUrl = (fmt) => `${API}/audits/${auditId}/export?format=${fmt}`;
 
   return (
     <div className="export-menu" ref={ref}>
@@ -81,22 +89,29 @@ function ExportMenu({ auditId }) {
       </button>
       {open && (
         <div className="export-menu-pop" data-testid="export-menu-pop">
-          <button type="button" className="export-menu-item"
-                  onClick={() => download("pdf")} disabled={!!busy}
-                  data-testid="export-pdf">
+          <a className="export-menu-item" href={openUrl("pdf")}
+             target="_blank" rel="noopener noreferrer"
+             download={`tse-audit-${auditId.slice(0, 8)}.pdf`}
+             onClick={(e) => download("pdf", e)}
+             data-testid="export-pdf">
             {busy === "pdf" ? "Preparing PDF…" : "PDF (.pdf)"}
-          </button>
-          <button type="button" className="export-menu-item"
-                  onClick={() => download("md")} disabled={!!busy}
-                  data-testid="export-md">
+          </a>
+          <a className="export-menu-item" href={openUrl("md")}
+             target="_blank" rel="noopener noreferrer"
+             download={`tse-audit-${auditId.slice(0, 8)}.md`}
+             onClick={(e) => download("md", e)}
+             data-testid="export-md">
             {busy === "md" ? "Preparing Markdown…" : "Markdown (.md)"}
-          </button>
-          <button type="button" className="export-menu-item"
-                  onClick={() => download("txt")} disabled={!!busy}
-                  data-testid="export-txt">
+          </a>
+          <a className="export-menu-item" href={openUrl("txt")}
+             target="_blank" rel="noopener noreferrer"
+             download={`tse-audit-${auditId.slice(0, 8)}.txt`}
+             onClick={(e) => download("txt", e)}
+             data-testid="export-txt">
             {busy === "txt" ? "Preparing text…" : "Plain text (.txt)"}
-          </button>
+          </a>
           {err && <div className="export-menu-error" data-testid="export-error">{err}</div>}
+          <div className="export-menu-hint">If nothing happens, right-click an option → “Save link as…”.</div>
         </div>
       )}
     </div>

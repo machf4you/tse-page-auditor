@@ -241,11 +241,18 @@
   text-align: left;
   cursor: pointer;
   font-family: inherit;
+  display: block;
 }
-.export-menu-item:hover:not(:disabled) { background: #f1f5f9; }
-.export-menu-item:disabled { opacity: 0.6; cursor: progress; }
+.export-menu-item:hover { background: #f1f5f9; }
 .export-menu-error {
   padding: 8px 12px 4px;
   color: #b91c1c;
   font-size: 12px;
+}
+.export-menu-hint {
+  padding: 6px 12px 8px;
+  color: #64748b;
+  font-size: 11px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
 }
