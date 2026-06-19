@@ -90,6 +90,45 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   showing what the (broken) extractor stored. With the fix both UI and
   export reflect the real page state.
 
+### V1.3.1 (2026-01-19) — Landing vs Hub classifier refinement
+
+**User-reported regression**: focused service landing pages with ≥ 5 H2s
+(*Bathroom Renovations*, *Local SEO Services*, *SEO Services*,
+*NIE & TIE Assistance*) were mis-classified as Hub because the V1.3
+classifier weighted H2 count and internal-link breadth too heavily.
+
+**New rule** (single decisive heuristic):
+
+1. **Strip generic landing-page H2s** before any analysis. The
+   `_GENERIC_H2_PAT` regex catches FAQ / Pricing / Reviews / Process /
+   About / Contact / Why Choose Us / Benefits / Gallery / Case Studies /
+   Book Now / Enquire Today / Next Steps / What Clients Say / News /
+   Awards / etc.
+2. A non-generic H2 introduces a **sub-topic** only when it contains
+   **two or more** substantive tokens that are NOT in the H1 / phrase
+   anchor and NOT in the `_GENERIC_TOKENS` decorator set. A single new
+   noun (e.g. "card" in "What is a TIE card" against
+   "NIE & TIE Assistance") is just descriptive language, not a new
+   topic.
+3. **Hub iff ≥ 4 H2 sections introduce sub-topics.** Internal-link
+   count, word count, and H2 count alone no longer drive the decision.
+
+**Verified**:
+- Civion `spanish-residency-services-help-for-expats` → Hub Page,
+  Strong Fit 77 / 100. Signals: *"7 H2 sections introduce distinct
+  sub-topics (e.g. 'TIE Card Application', 'NIE Number Application',
+  'Empadronamiento Registration')"*. Recommendation unchanged.
+- Synthetic landings (*Bathroom Renovations*, *Local SEO Services*,
+  *SEO Services*, *NIE & TIE Assistance*) all now classify as Landing
+  Page — including the trickiest case where the H2s split between NIE
+  and TIE because that *is* the service.
+- Synthetic hubs (*Healthcare in Spain*, *Education Support*) classify
+  as Hub Page.
+
+**Tests**: 39 new tests in `tests/test_classification_v131.py` covering
+the user's golden examples in both directions + the generic-H2 regex
+parametrically. Total backend suite: **99/99 passing**.
+
 ### V1.3 (2026-01-19) — Page Assessment (primary output)
 
 **Pivot from scoring to decision-making.** Every audit now leads with a

@@ -9,9 +9,33 @@ consultant actually cares about:
   3. What's the next action?      → one of five recommendation sentences
 
 Deterministic — no LLM in V1. Uses the topic-matching engine from V1.2
-for phrase fit and a small set of strong structural signals
-(URL hints, JSON-LD schema, H2 count + diversity, internal-link breadth,
-commercial CTAs) for page-type classification.
+for phrase fit and a small set of strong structural signals for
+page-type classification.
+
+V1.3.1 (2026-01-19) — re-tuned the Landing vs Hub boundary.
+
+A focused landing page (e.g. "Bathroom Renovations", "Local SEO
+Services", "NIE & TIE Assistance") routinely has 5+ H2 sections
+("Our process", "Pricing", "FAQ", "Reviews") and 15+ internal links.
+The previous heuristic mis-classified them as Hub. The new rule:
+
+  - Strip H2s that match a known generic landing-page section
+    pattern (FAQ / Pricing / Reviews / Process / About / Contact /
+    Why Choose Us / Benefits / Gallery / etc.). These don't count
+    either way.
+  - An H2 introduces a *sub-topic* only when it contains a
+    SUBSTANTIVE token that's not in the H1/phrase anchor and not a
+    generic decorator word.
+  - Hub iff ≥ 4 H2s introduce sub-topics. Otherwise Landing.
+
+The "Spanish Residency Services" Civion case still classifies as Hub
+because its H2s name distinct services (TIE Card, NIE Number, Padron,
+Social Security, Digital Certificate, Tax Residency) — all introduce
+new substantive tokens. The "Bathroom Renovations" landing now
+classifies correctly because "Our Process", "Pricing", "FAQ", "Reviews"
+are generic, and a vertical-segmented H2 like "Local SEO Services for
+restaurants" still only introduces one new substantive token, well
+under the 4-sub-topic Hub threshold.
 """
 from __future__ import annotations
 
@@ -20,7 +44,7 @@ from itertools import combinations
 from urllib.parse import urlparse
 
 from .models import ExtractedPage, PageAssessment
-from .scorer import _contains, _norm, _topic_score
+from .scorer import _contains, _norm, _topic_score, _topic_tokens, _stem
 
 
 # ----------- Page-type signals -----------
@@ -45,6 +69,62 @@ _COMMERCIAL_CTA = re.compile(
     re.I,
 )
 
+# Generic H2 section headings that appear on landing pages without
+# introducing a new sub-topic. Matched after stripping trailing punctuation.
+_GENERIC_H2_PAT = re.compile(
+    r"^("
+    r"(?:our|the)\s+(?:process|approach|service|services|story|team|guarantee|"
+    r"  values|work|method|methodology|workflow|journey|history|mission|promise)|"
+    r"how\s+(?:it\s+|we\s+)?works?|how\s+we\s+(?:work|deliver|operate|help|do\s+it)|"
+    r"why\s+(?:choose|work\s+with|hire)\s+us|why\s+us|why\s+(?:choose|hire)|"
+    r"what\s+(?:we\s+do|to\s+expect|you\s+(?:get|need))|"
+    r"what\s+(?:our|my)\s+clients?\s+(?:say|think)|what\s+people\s+(?:say|think)|"
+    r"(?:the\s+)?(?:benefits?|features?|advantages?|results?|outcomes?)|"
+    r"(?:pricing|prices|cost|costs|fees|packages?|plans?|investment)"
+    r"(?:\s*(?:&|and|\+|/|,|·)\s*(?:pricing|prices|cost|costs|fees|packages?|plans?|investment))*|"
+    r"reviews?|testimonials?|client\s+(?:stories|reviews|feedback)|"
+    r"faqs?|frequently\s+asked\s+questions|questions?\s+(?:and\s+)?answers?|q\s*&\s*a|"
+    r"contact(?:\s+us)?|get\s+in\s+touch|where\s+to\s+find|location|opening\s+hours|"
+    r"about(?:\s+us)?|who\s+we\s+are|about\s+the\s+(?:company|team|business)|meet\s+the\s+team|"
+    r"book(?:\s+(?:now|a\s+call|a\s+consultation|today))?|"
+    r"enquir(?:e|y|ies)(?:\s+(?:now|today))?|"
+    r"request\s+(?:a\s+)?(?:quote|callback|call)|free\s+consultation|"
+    r"next\s+steps|ready\s+to\s+(?:get\s+)?start(?:ed)?|get\s+started|"
+    r"gallery|portfolio|case\s+stud(?:y|ies)|examples?|our\s+work|recent\s+(?:projects?|work)|"
+    r"news|blog|articles|latest|related\s+(?:articles?|posts?|reading)|"
+    r"on\s+this\s+page|table\s+of\s+contents|contents?|index|summary|overview|introduction|"
+    r"trusted\s+by|brands?\s+(?:we|that)\s+(?:trust|work\s+with)|as\s+seen\s+(?:in|on)|"
+    r"awards?|certifications?|accreditations?|"
+    r"social\s+(?:media|proof)|follow\s+us"
+    r")$",
+    re.I | re.X,
+)
+
+# Words that look substantive in isolation but don't actually introduce a
+# new SEO sub-topic. We strip these from H2 tokens before deciding whether
+# the H2 is a sub-topic. Stored as the *stemmed* form so the comparison
+# matches what _topic_tokens produces.
+_GENERIC_TOKEN_SOURCES = {
+    "process", "service", "team", "pricing", "price", "cost", "fee", "package",
+    "plan", "review", "testimonial", "faq", "contact", "about", "story",
+    "approach", "guarantee", "value", "benefit", "feature", "advantage",
+    "result", "outcome", "include", "work", "deliver", "operate", "help",
+    "page", "site", "website", "section", "way", "tip", "step", "guide",
+    "list", "overview", "summary", "introduction", "table", "content",
+    "info", "information", "detail", "main", "important", "best", "top",
+    "more", "less", "yes", "no", "make", "made", "get", "got", "go",
+    "want", "need", "see", "find", "use", "used", "client", "customer",
+    "company", "business", "people", "person", "thing", "stuff", "us",
+    "we", "you", "they", "them", "ours", "theirs", "near", "around",
+    "today", "now", "next", "first", "last", "new", "old",
+    "year", "month", "day", "time", "hour", "week",
+    "good", "great", "amazing", "perfect", "ideal",
+    "matter", "matters", "include", "includes",
+    "number", "numbers", "type", "types", "kind", "kinds",
+    "starter", "ready", "started",
+}
+_GENERIC_TOKENS = {_stem(w) for w in _GENERIC_TOKEN_SOURCES}
+
 
 def _slug_of(url: str) -> str:
     try:
@@ -54,9 +134,25 @@ def _slug_of(url: str) -> str:
     return path.strip("/").replace("/", " ").replace("-", " ").replace("_", " ").lower()
 
 
+def _is_generic_h2(h2: str) -> bool:
+    text = (h2 or "").strip().rstrip("?.!:")
+    return bool(_GENERIC_H2_PAT.match(text))
+
+
+def _h2_subtopic_tokens(h2: str, anchor_tokens: set) -> set:
+    """Substantive tokens in this H2 that aren't already in the anchor and
+    aren't generic decorator words. **Two or more** substantive tokens are
+    required for the H2 to be treated as a genuine sub-topic — a single
+    new noun (e.g. "card" in "What is a TIE card" against
+    "NIE & TIE Assistance") is just descriptive language, not a new topic.
+    """
+    new = _topic_tokens(h2) - anchor_tokens - _GENERIC_TOKENS
+    return new if len(new) >= 2 else set()
+
+
 # ----------- Classification -----------
 
-def classify(page: ExtractedPage) -> tuple[str, str, list[str]]:
+def classify(page: ExtractedPage, phrase: str = "") -> tuple[str, str, list[str]]:
     """Return (page_type, label, signals_list)."""
     signals: list[str] = []
     url_lower = (page.url or "").lower()
@@ -80,45 +176,77 @@ def classify(page: ExtractedPage) -> tuple[str, str, list[str]]:
     if cat_score >= 3:
         return ("category", "Category Page", signals)
 
-    # 2. HUB — broad, multi-topic page that mostly navigates to deeper pages.
-    hub_signals: list[str] = []
-    hub_score = 0
+    # 2. LANDING vs HUB — split on whether the page introduces multiple
+    #    distinct sub-topics, NOT on H2 count or link breadth.
     h2s = list(page.h2 or [])
-    if len(h2s) >= 5:
-        hub_score += 1
-        hub_signals.append(f"{len(h2s)} H2 sections across the page")
-    # H2 topical diversity — average pairwise topic overlap; low = diverse.
-    if len(h2s) >= 4:
-        pair_scores = [_topic_score(a, b) for a, b in combinations(h2s, 2)]
-        avg_overlap = (sum(pair_scores) / len(pair_scores)) if pair_scores else 100
-        if avg_overlap < 40:
-            hub_score += 2
-            hub_signals.append(
-                f"H2 sections cover diverse subtopics (avg overlap {avg_overlap:.0f}%)"
-            )
-        elif avg_overlap < 60:
-            hub_score += 1
-            hub_signals.append(
-                f"H2 sections cover several subtopics (avg overlap {avg_overlap:.0f}%)"
-            )
-    if len(page.internal_links or []) >= 15:
-        hub_score += 1
-        hub_signals.append(
-            f"{len(page.internal_links)} internal links — wide navigation footprint"
-        )
-    has_cta = bool(_COMMERCIAL_CTA.search(page.body_text or ""))
-    if (page.word_count or 0) >= 800 and not has_cta:
-        hub_score += 1
-        hub_signals.append("Long-form content without a strong commercial CTA")
-    if hub_score >= 3:
-        return ("hub", "Hub Page", signals + hub_signals)
+    h1 = (page.h1 or [""])[0]
+    anchor = h1 or phrase or ""
+    anchor_tokens = _topic_tokens(anchor) if anchor else set()
 
-    # 3. Default — LANDING. Surface whichever positive signals we found.
-    signals.extend(hub_signals)
-    if has_cta:
+    sub_topic_h2s: list[tuple[str, set]] = []  # (h2_text, new_tokens)
+    aligned_h2s: list[str] = []
+    generic_h2s: list[str] = []
+    for h in h2s:
+        if _is_generic_h2(h):
+            generic_h2s.append(h)
+            continue
+        if not anchor_tokens:
+            # No anchor to compare against — treat as aligned (don't penalise).
+            aligned_h2s.append(h)
+            continue
+        new_tokens = _h2_subtopic_tokens(h, anchor_tokens)
+        if new_tokens:
+            sub_topic_h2s.append((h, new_tokens))
+        else:
+            aligned_h2s.append(h)
+
+    # The single decisive rule: a page is a Hub if ≥4 H2 sections introduce
+    # distinct sub-topics. Otherwise it's a Landing — even with many H2s,
+    # many internal links and a long word count.
+    if len(sub_topic_h2s) >= 4:
+        examples = ", ".join(f"'{h}'" for h, _ in sub_topic_h2s[:3])
+        signals.append(
+            f"{len(sub_topic_h2s)} H2 sections introduce distinct sub-topics "
+            f"(e.g. {examples})"
+        )
+        # H2 pairwise diversity adds colour to the Hub diagnosis when present.
+        if len(sub_topic_h2s) >= 4:
+            pair_scores = [_topic_score(a, b) for (a, _), (b, _) in
+                           combinations(sub_topic_h2s, 2)]
+            avg_overlap = (sum(pair_scores) / len(pair_scores)) if pair_scores else 100
+            if avg_overlap < 30:
+                signals.append(
+                    f"Sub-topics are mutually distinct (avg overlap {avg_overlap:.0f}%)"
+                )
+        if aligned_h2s:
+            signals.append(
+                f"{len(aligned_h2s)} H2 section(s) still support the H1 topic"
+            )
+        if generic_h2s:
+            signals.append(
+                f"{len(generic_h2s)} generic landing-page section(s)"
+            )
+        return ("hub", "Hub Page", signals)
+
+    # LANDING — surface whichever positive signals we found.
+    if aligned_h2s:
+        signals.append(
+            f"{len(aligned_h2s)} of {len(h2s)} H2 sections support the H1 topic"
+        )
+    if generic_h2s:
+        signals.append(
+            f"{len(generic_h2s)} generic landing-page section(s) "
+            f"(FAQ / Pricing / Reviews / Process)"
+        )
+    if sub_topic_h2s:
+        signals.append(
+            f"{len(sub_topic_h2s)} H2 section(s) touch additional topics but stay "
+            f"within the service scope"
+        )
+    if _COMMERCIAL_CTA.search(page.body_text or ""):
         signals.append("Commercial CTA detected in body copy")
-    if (page.word_count or 0) < 800 and len(h2s) <= 4:
-        signals.append("Focused page (one or two sections, low word count)")
+    if (page.word_count or 0) < 1500 and len(h2s) <= 6:
+        signals.append("Focused page (under 1500 words, ≤6 H2 sections)")
     return ("landing", "Landing Page", signals)
 
 
@@ -265,7 +393,7 @@ _LABEL_BY_FIT = {
 
 
 def assess(page: ExtractedPage, phrase: str) -> PageAssessment:
-    page_type, page_type_label, type_signals = classify(page)
+    page_type, page_type_label, type_signals = classify(page, phrase)
     fit, fit_score, fit_breakdown = phrase_fit(page, phrase)
     recommendation, rationale = recommend(page_type, fit, fit_score)
     return PageAssessment(
