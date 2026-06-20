@@ -31,9 +31,18 @@ from audit.report import render_markdown, render_pdf, render_text
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+try:
+    mongo_url = os.environ.get("MONGO_URL")
+    if not mongo_url:
+        raise KeyError("MONGO_URL not set")
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ.get("DB_NAME", "tse-page-auditor")]
+except Exception:
+    import warnings
+    warnings.warn("MONGO_URL not configured. Falling back to in-memory mongomock-motor.")
+    from mongomock_motor import AsyncMongoMockClient
+    client = AsyncMongoMockClient()
+    db = client["tse-page-auditor"]
 
 app = FastAPI(title="TSE Page Auditor", version="1.0.0")
 api = APIRouter(prefix="/api")
