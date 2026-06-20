@@ -12,30 +12,41 @@ Deterministic — no LLM in V1. Uses the topic-matching engine from V1.2
 for phrase fit and a small set of strong structural signals for
 page-type classification.
 
-V1.3.1 (2026-01-19) — re-tuned the Landing vs Hub boundary.
+V1.3.4 (2026-02) — re-framed the sub-topic question.
 
-A focused landing page (e.g. "Bathroom Renovations", "Local SEO
-Services", "NIE & TIE Assistance") routinely has 5+ H2 sections
-("Our process", "Pricing", "FAQ", "Reviews") and 15+ internal links.
-The previous heuristic mis-classified them as Hub. The new rule:
+The classifier used to ask: *"Could this H2 become its own landing
+page?"* — which over-flagged any H2 that happened to contain two or
+more substantive new words. The user's refined principle:
 
-  - Strip H2s that match a known generic landing-page section
-    pattern (FAQ / Pricing / Reviews / Process / About / Contact /
-    Why Choose Us / Benefits / Gallery / etc.). These don't count
-    either way.
-  - An H2 introduces a *sub-topic* only when it contains a
-    SUBSTANTIVE token that's not in the H1/phrase anchor and not a
-    generic decorator word.
-  - Hub iff ≥ 4 H2s introduce sub-topics. Otherwise Landing.
+    The right question is "**SHOULD** this sub-topic become its own
+    standalone landing page?"
 
-The "Spanish Residency Services" Civion case still classifies as Hub
-because its H2s name distinct services (TIE Card, NIE Number, Padron,
-Social Security, Digital Certificate, Tax Residency) — all introduce
-new substantive tokens. The "Bathroom Renovations" landing now
-classifies correctly because "Our Process", "Pricing", "FAQ", "Reviews"
-are generic, and a vertical-segmented H2 like "Local SEO Services for
-restaurants" still only introduces one new substantive token, well
-under the 4-sub-topic Hub threshold.
+  - An H2 that extends the anchor with a facet (e.g. "Bathroom
+    Renovation Costs", "Bathroom Renovation Process", "Bathroom
+    Renovation FAQs") supports the primary service and must stay on
+    the page — it reinforces Landing.
+  - An H2 that names an independent service or entity (e.g. "TIE
+    Card Application", "NIE Number Application", "Padron
+    Registration", "Social Security Number") warrants its own
+    standalone target page — it reinforces Hub.
+
+Implementation:
+
+  1. Strip generic landing-page section H2s (FAQ / Pricing / Reviews /
+     Process / About / Contact / Areas covered / etc.).
+  2. NEW (V1.3.4) — if the H2 contains *all* of the anchor's
+     distinctive tokens (anchor tokens minus generic decorators), it
+     is an anchor extension / facet and does NOT count as a sub-topic
+     regardless of how many extra modifier words it carries.
+     ("Bathroom Renovation Costs" contains both `bathroom` and
+     `renovation` → facet. "Public Healthcare System" contains only
+     `healthcare` of {`healthcare`, `spain`} → not a facet, still
+     evaluated as a candidate sub-topic.)
+  3. Otherwise, the H2 counts as a sub-topic iff it adds ≥ 2
+     substantive new tokens (already filters trivial single-word
+     additions like "Insurance" on a Bathroom Renovations page).
+  4. Hub iff ≥ 4 sub-topic H2s (or ≥ 6 for purpose-locked landings —
+     V1.3.3 gate).
 """
 from __future__ import annotations
 
@@ -75,16 +86,21 @@ _GENERIC_H2_PAT = re.compile(
     r"^("
     r"(?:our|the)\s+(?:process|approach|service|services|story|team|guarantee|"
     r"  values|work|method|methodology|workflow|journey|history|mission|promise)|"
+    r"process|approach|method|methodology|workflow|"
     r"how\s+(?:it\s+|we\s+)?works?|how\s+we\s+(?:work|deliver|operate|help|do\s+it)|"
     r"why\s+(?:choose|work\s+with|hire)\s+us|why\s+us|why\s+(?:choose|hire)|"
     r"what\s+(?:we\s+do|to\s+expect|you\s+(?:get|need))|"
     r"what\s+(?:our|my)\s+clients?\s+(?:say|think)|what\s+people\s+(?:say|think)|"
     r"(?:the\s+)?(?:benefits?|features?|advantages?|results?|outcomes?)|"
-    r"(?:pricing|prices|cost|costs|fees|packages?|plans?|investment)"
-    r"(?:\s*(?:&|and|\+|/|,|·)\s*(?:pricing|prices|cost|costs|fees|packages?|plans?|investment))*|"
+    r"(?:pricing|prices|cost|costs|fees|packages?|plans?|investment|budget|"
+    r"  budgets?\s+option(?:s)?|budget\s+options?|rates?|deposit|deposits?)"
+    r"(?:\s*(?:&|and|\+|/|,|·)\s*(?:pricing|prices|cost|costs|fees|packages?|"
+    r"  plans?|investment|budget|rates?|deposit|deposits?|options?))*|"
     r"reviews?|testimonials?|client\s+(?:stories|reviews|feedback)|"
     r"faqs?|frequently\s+asked\s+questions|questions?\s+(?:and\s+)?answers?|q\s*&\s*a|"
     r"contact(?:\s+us)?|get\s+in\s+touch|where\s+to\s+find|location|opening\s+hours|"
+    r"areas?(?:\s+(?:we\s+)?(?:cover|covered|serve|service))?|"
+    r"where\s+we\s+(?:work|serve|cover|operate)|service\s+areas?|coverage\s+area?s?|"
     r"about(?:\s+us)?|who\s+we\s+are|about\s+the\s+(?:company|team|business)|meet\s+the\s+team|"
     r"book(?:\s+(?:now|a\s+call|a\s+consultation|today))?|"
     r"enquir(?:e|y|ies)(?:\s+(?:now|today))?|"
@@ -104,23 +120,47 @@ _GENERIC_H2_PAT = re.compile(
 # new SEO sub-topic. We strip these from H2 tokens before deciding whether
 # the H2 is a sub-topic. Stored as the *stemmed* form so the comparison
 # matches what _topic_tokens produces.
+#
+# V1.3.3 — expanded to cover the user's "Costs / Process / Budget options /
+# FAQs / Areas covered" example fully. These are facets of a single
+# service, not independent topics.
 _GENERIC_TOKEN_SOURCES = {
+    # Pricing / cost facets
     "process", "service", "team", "pricing", "price", "cost", "fee", "package",
-    "plan", "review", "testimonial", "faq", "contact", "about", "story",
-    "approach", "guarantee", "value", "benefit", "feature", "advantage",
-    "result", "outcome", "include", "work", "deliver", "operate", "help",
-    "page", "site", "website", "section", "way", "tip", "step", "guide",
-    "list", "overview", "summary", "introduction", "table", "content",
-    "info", "information", "detail", "main", "important", "best", "top",
-    "more", "less", "yes", "no", "make", "made", "get", "got", "go",
-    "want", "need", "see", "find", "use", "used", "client", "customer",
+    "plan", "rate", "budget", "investment", "deposit", "discount",
+    # Process / approach facets
+    "approach", "guarantee", "stage", "step", "method", "methodology",
+    "workflow", "journey", "story", "history", "mission",
+    # Coverage / geo facets
+    "area", "region", "location", "place", "cover", "coverage", "where",
+    "served", "serve",
+    # Quality / outcome facets
+    "value", "benefit", "feature", "advantage", "result", "outcome",
+    "quality", "standard", "warranty", "promise",
+    # Review / contact facets
+    "review", "testimonial", "feedback", "client", "customer", "contact",
+    "about", "story", "page", "site", "website",
+    # Information facets
+    "include", "section", "way", "tip", "guide", "list", "overview",
+    "summary", "introduction", "table", "content", "info", "information",
+    "detail", "main", "important", "best", "top", "more", "less", "yes",
+    "no",
+    # Verb facets
+    "work", "deliver", "operate", "help", "make", "made", "get", "got",
+    "go", "want", "need", "see", "find", "use", "used", "do", "does",
+    # Reference facets
     "company", "business", "people", "person", "thing", "stuff", "us",
-    "we", "you", "they", "them", "ours", "theirs", "near", "around",
-    "today", "now", "next", "first", "last", "new", "old",
-    "year", "month", "day", "time", "hour", "week",
-    "good", "great", "amazing", "perfect", "ideal",
-    "matter", "matters", "include", "includes",
-    "number", "numbers", "type", "types", "kind", "kinds",
+    "we", "you", "they", "them", "ours", "yours",
+    # Time / qualifier facets
+    "near", "around", "today", "now", "next", "first", "last", "new",
+    "old", "year", "month", "day", "time", "hour", "week",
+    "good", "great", "amazing", "perfect", "ideal", "matter",
+    # Type / variation facets
+    "number", "type", "kind", "variety", "size", "shape", "style",
+    "option", "choice", "available",
+    # Question / answer facets
+    "question", "answer", "faq",
+    # State facets
     "starter", "ready", "started",
 }
 _GENERIC_TOKENS = {_stem(w) for w in _GENERIC_TOKEN_SOURCES}
@@ -139,14 +179,41 @@ def _is_generic_h2(h2: str) -> bool:
     return bool(_GENERIC_H2_PAT.match(text))
 
 
-def _h2_subtopic_tokens(h2: str, anchor_tokens: set) -> set:
-    """Substantive tokens in this H2 that aren't already in the anchor and
-    aren't generic decorator words. **Two or more** substantive tokens are
-    required for the H2 to be treated as a genuine sub-topic — a single
-    new noun (e.g. "card" in "What is a TIE card" against
-    "NIE & TIE Assistance") is just descriptive language, not a new topic.
+def _is_h2_anchor_extension(h2_tokens: set, anchor_tokens: set) -> bool:
+    """True when the H2 contains ALL of the anchor's distinctive tokens.
+
+    Distinctive = anchor tokens minus generic decorator tokens. When an
+    H2 fully re-states the anchor topic plus any modifier, it's a facet
+    of the same service ("Bathroom Renovation Costs", "Our Bathroom
+    Renovation Process", "How long does a bathroom renovation take") —
+    it reinforces Landing, not Hub. This is the V1.3.4 refinement: the
+    question shifts from "could this become a separate page?" to
+    "**should** this become a separate page?". An H2 that merely
+    modifies the main service shouldn't.
     """
-    new = _topic_tokens(h2) - anchor_tokens - _GENERIC_TOKENS
+    distinctive = anchor_tokens - _GENERIC_TOKENS
+    if not distinctive:
+        return False
+    return distinctive.issubset(h2_tokens)
+
+
+def _h2_subtopic_tokens(h2: str, anchor_tokens: set) -> set:
+    """Substantive tokens in this H2 that warrant treating it as a
+    standalone landing-page candidate.
+
+    Two gates must pass:
+
+    1. **Anchor-extension gate (V1.3.4)** — if the H2 contains every
+       distinctive anchor token, it's a facet of the same service
+       (e.g. "Bathroom Renovation Costs") and is dropped.
+    2. **Substantive-tokens gate** — the H2 must contribute ≥ 2 new
+       substantive tokens (not in the anchor, not generic decorators)
+       so we don't classify on a single-word noun like "Insurance".
+    """
+    h2_tokens = _topic_tokens(h2)
+    if anchor_tokens and _is_h2_anchor_extension(h2_tokens, anchor_tokens):
+        return set()
+    new = h2_tokens - anchor_tokens - _GENERIC_TOKENS
     return new if len(new) >= 2 else set()
 
 
@@ -209,34 +276,34 @@ def classify(
             aligned_h2s.append(h)
 
     if len(sub_topic_h2s) >= 4:
-        # ------ V1.3.2 Landing Precedence gate ------
-        # When the title, H1 AND URL all strongly match the target phrase
-        # AND the page has a commercial CTA AND the H2 sections are
-        # substantive (not navigation-card snippets), this is a deep
-        # landing page that explains its single service in depth — not
-        # a hub.
-        strong_anchors_count = sum([
-            (fit_breakdown.get("title", 0) or 0) >= 80,
-            (fit_breakdown.get("h1", 0) or 0) >= 80,
-            (fit_breakdown.get("url", 0) or 0) >= 50,
-        ])
+        # ------ V1.3.3 Purpose-first gate ------
+        # The user's spec: "page purpose should take precedence over H2
+        # structure". When the page has a clear single commercial objective
+        # (title + H1 strongly aligned to the phrase, plus URL match or a
+        # commercial CTA), the bar to flip into Hub is much higher.
+        title_aligned = (fit_breakdown.get("title", 0) or 0) >= 80
+        h1_aligned = (fit_breakdown.get("h1", 0) or 0) >= 80
+        url_aligned = (fit_breakdown.get("url", 0) or 0) >= 50
         has_cta = bool(_COMMERCIAL_CTA.search(page.body_text or ""))
-        # Total non-generic H2 sections share the body word count.
-        substantive_h2_count = len(sub_topic_h2s) + len(aligned_h2s)
-        avg_words_per_h2 = (
-            (page.word_count or 0) / max(1, substantive_h2_count)
+        single_objective = (
+            title_aligned and h1_aligned and (url_aligned or has_cta)
         )
-        landing_precedence = (
-            strong_anchors_count >= 2
-            and has_cta
-            and avg_words_per_h2 >= 150
-        )
+        # With a single commercial objective the page needs ≥6 H2 sub-topics
+        # to flip into Hub — i.e. it must genuinely be an index of many
+        # independently rankable services (Civion's 7 distinct admin
+        # services pass this; a Bathroom Renovations landing with 5
+        # detailed sub-sections does not).
+        hub_threshold = 6 if single_objective else 4
 
-        if not landing_precedence:
+        if len(sub_topic_h2s) >= hub_threshold:
             examples = ", ".join(f"'{h}'" for h, _ in sub_topic_h2s[:3])
             signals.append(
                 f"{len(sub_topic_h2s)} H2 sections introduce distinct sub-topics "
                 f"(e.g. {examples})"
+            )
+            signals.append(
+                "Each sub-topic should be its own dedicated landing page "
+                "rather than a section here"
             )
             pair_scores = [_topic_score(a, b) for (a, _), (b, _) in
                            combinations(sub_topic_h2s, 2)]
@@ -245,26 +312,27 @@ def classify(
                 signals.append(
                     f"Sub-topics are mutually distinct (avg overlap {avg_overlap:.0f}%)"
                 )
-            signals.append(
-                f"~{int(avg_words_per_h2)} words per H2 — navigation depth, "
-                f"not content depth"
-            )
             if aligned_h2s:
                 signals.append(
-                    f"{len(aligned_h2s)} H2 section(s) still support the H1 topic"
+                    f"{len(aligned_h2s)} H2 section(s) still align with the H1"
                 )
             return ("hub", "Hub Page", signals)
 
-        # Landing precedence triggered — fall through and surface why.
-        signals.append(
-            f"Strong phrase fit ({strong_anchors_count}/3 anchors) + commercial CTA "
-            f"+ {int(avg_words_per_h2)} words per H2 → detailed landing page, "
-            f"not a navigation hub"
-        )
-        signals.append(
-            f"{len(sub_topic_h2s)} H2 sub-sections expand the service rather than "
-            f"linking to deeper pages"
-        )
+        # Below the Hub threshold — Landing precedence wins.
+        if single_objective:
+            signals.append(
+                f"Single commercial objective detected (title + H1 strongly "
+                f"matched, {'URL also matches' if url_aligned else 'commercial CTA present'})"
+            )
+            signals.append(
+                f"{len(sub_topic_h2s)} sub-section(s) detected but below the "
+                f"≥{hub_threshold} sub-topic Hub threshold for a purpose-locked page"
+            )
+        else:
+            signals.append(
+                f"{len(sub_topic_h2s)} sub-topic H2 section(s) — below the "
+                f"≥{hub_threshold} Hub threshold"
+            )
     else:
         # < 4 sub-topic H2s — vanilla landing, surface the structure.
         if aligned_h2s:
@@ -274,7 +342,7 @@ def classify(
         if generic_h2s:
             signals.append(
                 f"{len(generic_h2s)} generic landing-page section(s) "
-                f"(FAQ / Pricing / Reviews / Process)"
+                f"(FAQ / Pricing / Reviews / Process / Areas covered)"
             )
         if sub_topic_h2s:
             signals.append(
@@ -283,8 +351,6 @@ def classify(
             )
         if _COMMERCIAL_CTA.search(page.body_text or ""):
             signals.append("Commercial CTA detected in body copy")
-        if (page.word_count or 0) < 1500 and len(h2s) <= 6:
-            signals.append("Focused page (under 1500 words, ≤6 H2 sections)")
     return ("landing", "Landing Page", signals)
 
 

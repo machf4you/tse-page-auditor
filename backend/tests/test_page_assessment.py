@@ -117,30 +117,33 @@ HUB_HTML = """<!doctype html><html><head>
   <p>{ss}</p>
   <h2>Digital Certificate Setup</h2>
   <p>{dc}</p>
-  <h2>Tax Residency</h2>
-  <p>{tax}</p>
+  <h2>Healthcare Registration</h2>
+  <p>{health}</p>
+  <h2>Banking Account Setup</h2>
+  <p>{bank}</p>
 """.replace("{tie}", " ".join(["TIE card help for British expats in Spain."] * 12)) \
    .replace("{nie}", " ".join(["NIE number help for British expats in Spain."] * 12)) \
    .replace("{padron}", " ".join(["Padron registration help for expats in Spain."] * 12)) \
    .replace("{ss}", " ".join(["Social security signup for expats living in Spain."] * 12)) \
    .replace("{dc}", " ".join(["Digital certificate help for residents in Spain."] * 12)) \
-   .replace("{tax}", " ".join(["Tax residency planning for expats living in Spain."] * 12)) + \
+   .replace("{health}", " ".join(["Healthcare registration for expats living in Spain."] * 12)) \
+   .replace("{bank}", " ".join(["Banking account setup for expats living in Spain."] * 12)) + \
 """<a href="/tie-card/">TIE card</a>
    <a href="/nie/">NIE</a>
    <a href="/padron/">Padron</a>
    <a href="/social-security/">Social security</a>
    <a href="/digital-cert/">Digital certificate</a>
-   <a href="/tax/">Tax</a>
    <a href="/healthcare/">Healthcare</a>
-   <a href="/driving/">Driving licence</a>
    <a href="/banking/">Banking</a>
-   <a href="/schools/">Schools</a>
+   <a href="/driving/">Driving licence</a>
    <a href="/property/">Property</a>
    <a href="/legal/">Legal</a>
    <a href="/visas/">Visas</a>
    <a href="/relocation/">Relocation</a>
    <a href="/citizenship/">Citizenship</a>
    <a href="/passport/">Passport</a>
+   <a href="/tax/">Tax</a>
+   <a href="/schools/">Schools</a>
 </main></body></html>"""
 
 

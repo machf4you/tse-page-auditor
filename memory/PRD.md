@@ -90,6 +90,36 @@ No ZIP uploads, no site exports, no full-site crawl, no auth. V1 uses
   showing what the (broken) extractor stored. With the fix both UI and
   export reflect the real page state.
 
+### V1.3.4 (2026-02) — "Should it become its own page?" sub-topic gate
+
+**User's refined principle**: V1.3.3's sub-topic detector asked "*could*
+this H2 become a landing page?", which still over-counted H2s like
+"Bathroom Renovation Costs" on a focused service page. The user's
+sharper question:
+
+> The distinction is whether the sub-topic **should** become a
+> standalone target page.
+
+  - "Bathroom Renovation Costs / Process / FAQs" — facets of the same
+    service → reinforce Landing.
+  - "TIE Card Application / NIE Number / Padron Registration /
+    Social Security Number" — independent services → reinforce Hub.
+
+**Fix**: a new anchor-extension gate runs before the substantive-token
+gate. If the H2 contains **all** of the anchor's distinctive tokens
+(anchor tokens minus generic decorators), it's a facet of the same
+service and does not count, regardless of how many modifier words it
+adds. Otherwise the existing ≥2-substantive-new-tokens rule applies.
+
+The signal text now reflects the principle: "Each sub-topic **should
+be** its own dedicated landing page rather than a section here" (was
+"could reasonably become").
+
+**Tests**: 16 new tests in `tests/test_classification_v134.py` —
+includes the user's verbatim Landing facets and Hub independents,
+plus the "Public Healthcare System" partial-overlap edge case.
+Total backend suite: **129/129 passing**.
+
 ### V1.3.2 (2026-01-19) — Landing Precedence gate
 
 **User-reported regression**: V1.3.1 still mis-classified deep landing

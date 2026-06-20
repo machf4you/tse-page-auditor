@@ -163,7 +163,7 @@ def test_landing_precedence_nie_tie_with_sub_topics():
 
 def test_hub_short_sections_no_cta_spanish_residency():
     """Civion-style hub: short navigation-card sections (~70 words each),
-    no commercial CTA on the umbrella page."""
+    no commercial CTA on the umbrella page. Needs ≥6 sub-topic H2s."""
     html = _build_hub_html(
         h1="Spanish Residency Services",
         h2s=[
@@ -172,13 +172,34 @@ def test_hub_short_sections_no_cta_spanish_residency():
             "Empadronamiento Registration",
             "Social Security Registration",
             "Digital Certificate Setup",
-            "Tax Residency Help",
+            "Healthcare Registration",
+            "Banking Account Setup",
         ],
         phrase="spanish residency services",
     )
     a = _assess(html, "https://x.test/spanish-residency-services/",
                 "Spanish Residency Services")
     assert a.page_type == "hub", (a.page_type_label, a.page_type_signals)
+
+
+def test_landing_with_strong_fit_few_sub_topics_classifies_as_landing():
+    """V1.3.3: strong purpose + sub-topics below the ≥6 Hub threshold for a
+    purpose-locked page → Landing precedence."""
+    html = _build_deep_landing_html(
+        h1="Bathroom Renovations",
+        h2s=["Pricing", "FAQs"],
+        sub_topic_h2s=[
+            "Wet Room Conversions",
+            "Walk-in Shower Installations",
+            "Heated Floor Systems",
+            "Bathroom Tile Selections",
+            "Mirror Cabinet Choices",
+        ],
+        phrase="bathroom renovations",
+    )
+    a = _assess(html, "https://x.test/bathroom-renovations/", "Bathroom Renovations")
+    # 5 sub-topics + strong purpose → Landing precedence.
+    assert a.page_type == "landing", (a.page_type_label, a.page_type_signals)
 
 
 def test_hub_healthcare_in_spain_short_sections():
@@ -218,13 +239,12 @@ def test_hub_education_support_short_sections():
 # ---------------- Boundary cases ----------------
 
 def test_landing_with_strong_fit_but_no_cta_falls_to_hub():
-    """If a page has strong fit + many sub-topic H2s + LONG sections
-    BUT no commercial CTA at all, the user's spec is honoured:
-    Hub classification kicks back in (the third condition of the
-    precedence gate failed)."""
+    """V1.3.3: the "single commercial objective" gate requires title + H1
+    + (URL OR CTA). If the URL doesn't match AND there's no CTA, the
+    purpose-first gate fails — Hub takes over with 5 sub-topic H2s."""
     html = _build_deep_landing_html(
         h1="Bathroom Renovations",
-        h2s=[],  # no generic sections
+        h2s=[],
         sub_topic_h2s=[
             "Wet Room Conversions",
             "Walk-in Shower Installations",
@@ -236,8 +256,9 @@ def test_landing_with_strong_fit_but_no_cta_falls_to_hub():
     ).replace("Book a call with us", "").replace(
         "Book a Free Consultation", "Overview"
     )
-    a = _assess(html, "https://x.test/bathroom-renovations/", "Bathroom Renovations")
-    # With no CTA the landing precedence gate fails — hub.
+    # URL slug doesn't match the phrase — neither URL nor CTA → single
+    # objective gate fails → Hub.
+    a = _assess(html, "https://x.test/some-unrelated-slug/", "Bathroom Renovations")
     assert a.page_type == "hub", (a.page_type_label, a.page_type_signals)
 
 
