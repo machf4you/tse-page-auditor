@@ -131,6 +131,8 @@ _GENERIC_TOKEN_SOURCES = {
     # Process / approach facets
     "approach", "guarantee", "stage", "step", "method", "methodology",
     "workflow", "journey", "story", "history", "mission",
+    "design", "quote", "inspect", "inspection", "install", "installation",
+    "difference", "final",
     # Coverage / geo facets
     "area", "region", "location", "place", "cover", "coverage", "where",
     "served", "serve",
@@ -157,9 +159,10 @@ _GENERIC_TOKEN_SOURCES = {
     "good", "great", "amazing", "perfect", "ideal", "matter",
     # Type / variation facets
     "number", "type", "kind", "variety", "size", "shape", "style",
-    "option", "choice", "available",
+    "option", "choice", "available", "mid", "range", "full", "upgrade",
+    "typical",
     # Question / answer facets
-    "question", "answer", "faq",
+    "question", "answer", "faq", "affect", "affects", "what",
     # State facets
     "starter", "ready", "started",
 }
@@ -214,6 +217,7 @@ def _h2_subtopic_tokens(h2: str, anchor_tokens: set) -> set:
     if anchor_tokens and _is_h2_anchor_extension(h2_tokens, anchor_tokens):
         return set()
     new = h2_tokens - anchor_tokens - _GENERIC_TOKENS
+    new = {t for t in new if not t.isdigit()}
     return new if len(new) >= 2 else set()
 
 

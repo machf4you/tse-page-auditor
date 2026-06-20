@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 from .models import AuditResult, ExtractedPage, ScoreCheck
 
 
-_PUNCT = re.compile(r"[\s\-_/]+")
+_PUNCT = re.compile(r"[^\w\s]|_")
 _STOPS = {
     "the", "a", "an", "of", "in", "on", "for", "to", "and", "or",
     "at", "by", "with", "from", "into", "your", "our", "my", "i",
@@ -87,7 +87,8 @@ _GEO_NORMALISE = {
 
 
 def _norm(s: str) -> str:
-    return _PUNCT.sub(" ", (s or "").lower()).strip()
+    s = _PUNCT.sub(" ", (s or "").lower()).strip()
+    return " ".join(s.split())
 
 
 def _toks(s: str) -> List[str]:
